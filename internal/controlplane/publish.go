@@ -41,8 +41,8 @@ func NewPublisher(store OwnershipCommitter, control ControlPublisher, config Pub
 	if config.InstallationID == "" || config.NodeUID == "" || config.ELFBuildID == "" {
 		return nil, fmt.Errorf("installation ID, node UID and ELF build ID are required")
 	}
-	if config.HeartbeatTimeoutNS == 0 {
-		return nil, fmt.Errorf("heartbeat timeout must be non-zero")
+	if err := datapath.ValidateHeartbeatTimeoutNS(config.HeartbeatTimeoutNS); err != nil {
+		return nil, err
 	}
 	if config.Now == nil {
 		config.Now = time.Now

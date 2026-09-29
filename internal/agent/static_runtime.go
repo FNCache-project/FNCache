@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -56,11 +57,13 @@ type StaticRuntime struct {
 	publisher       *controlplane.Publisher
 }
 
+const runtimeLockDirectory = "/run/lock/oncache"
+
 func NewStaticRuntime(ctx context.Context, config StaticRuntimeConfig) (*StaticRuntime, error) {
 	if err := validateStaticRuntimeConfig(config); err != nil {
 		return nil, err
 	}
-	lock, err := acquireRuntimeLock(config.StatePath)
+	lock, err := acquireRuntimeLock(config.PinRoot, runtimeLockDirectory)
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +188,9 @@ func (r *StaticRuntime) Run(ctx context.Context) (reconcile.ReconcileResult, err
 		}
 		return result, fmt.Errorf("configure heartbeat renewal: %w", err)
 	}
-	if err := runHeartbeatLease(ctx, interval, r.control.Renew, r.control.Disable); err != nil {
+	if err := runHeartbeatLease(ctx, interval, func(ctx context.Context) error {
+		return r.control.Renew(ctx, r.config.Generation)
+	}, r.control.Disable); err != nil {
 		if ctx.Err() != nil {
 			coordinator.MarkStopping()
 		} else {
@@ -269,16 +274,17 @@ func (c *runtimeControl) Publish(ctx context.Context, generation, heartbeatTimeo
 	return c.writer.Publish(ctx, generation, heartbeatTimeoutNS, flags)
 }
 
-func (c *runtimeControl) Renew(ctx context.Context) error {
-	return c.writer.Renew(ctx)
+func (c *runtimeControl) Renew(ctx context.Context, expectedGeneration uint64) error {
+	return c.writer.Renew(ctx, expectedGeneration)
 }
 
 func (r *StaticRuntime) disableForShutdown() error {
 	return disableWithTimeout(r.control.Disable)
 }
 
-func acquireRuntimeLock(statePath string) (*os.File, error) {
-	lockPath := statePath + ".lock"
+func acquireRuntimeLock(pinRoot, lockDir string) (*os.File, error) {
+	identity := sha256.Sum256([]byte(filepath.Clean(pinRoot)))
+	lockPath := filepath.Join(lockDir, fmt.Sprintf("runtime-%x.lock", identity[:12]))
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0750); err != nil {
 		return nil, fmt.Errorf("create runtime lock directory: %w", err)
 	}
@@ -330,13 +336,10 @@ func runHeartbeatLease(ctx context.Context, interval time.Duration, renew func(c
 }
 
 func heartbeatRenewInterval(timeoutNS uint64) (time.Duration, error) {
-	if timeoutNS == 0 {
-		return 0, fmt.Errorf("heartbeat timeout must be non-zero")
+	if err := datapath.ValidateHeartbeatTimeoutNS(timeoutNS); err != nil {
+		return 0, err
 	}
 	intervalNS := timeoutNS / 3
-	if intervalNS == 0 {
-		intervalNS = 1
-	}
 	if intervalNS > uint64(1<<63-1) {
 		return 0, fmt.Errorf("heartbeat timeout is too large")
 	}

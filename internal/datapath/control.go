@@ -4,12 +4,17 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/cilium/ebpf"
 	"golang.org/x/sys/unix"
 )
 
 const controlMapABIVersion uint32 = 1
+
+// MinHeartbeatTimeoutNS prevents a runtime lease from becoming a busy-loop
+// or expiring before a normal scheduler tick can complete.
+const MinHeartbeatTimeoutNS uint64 = uint64(100 * time.Millisecond)
 
 type ControlV1 struct {
 	ABIVersion         uint32
@@ -115,8 +120,8 @@ func (w *ControlWriter) Publish(ctx context.Context, generation, heartbeatTimeou
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if heartbeatTimeoutNS == 0 {
-		return fmt.Errorf("heartbeat timeout must be non-zero")
+	if err := ValidateHeartbeatTimeoutNS(heartbeatTimeoutNS); err != nil {
+		return err
 	}
 	path := filepath.Join(w.pinRoot, "maps", "control_map")
 	control, err := w.open(path)
@@ -155,7 +160,7 @@ func (w *ControlWriter) Publish(ctx context.Context, generation, heartbeatTimeou
 // Renew refreshes the current control Map lease without changing its
 // generation, timeout, flags, or other control state. An already expired
 // lease is disabled instead of being silently revived.
-func (w *ControlWriter) Renew(ctx context.Context) error {
+func (w *ControlWriter) Renew(ctx context.Context, expectedGeneration uint64) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -177,7 +182,13 @@ func (w *ControlWriter) Renew(ctx context.Context) error {
 	if value.Enabled != 1 {
 		return fmt.Errorf("cannot renew disabled control Map")
 	}
-	if value.HeartbeatTimeoutNS == 0 || value.HeartbeatNS == 0 {
+	if value.Generation != expectedGeneration {
+		return fmt.Errorf("control Map generation changed: got %d want %d", value.Generation, expectedGeneration)
+	}
+	if err := ValidateHeartbeatTimeoutNS(value.HeartbeatTimeoutNS); err != nil {
+		return err
+	}
+	if value.HeartbeatNS == 0 {
 		return fmt.Errorf("control Map heartbeat is invalid")
 	}
 	now, err := w.now()
@@ -204,6 +215,15 @@ func (w *ControlWriter) Renew(ctx context.Context) error {
 func validateControlValue(value ControlV1) error {
 	if value.ABIVersion != controlMapABIVersion {
 		return fmt.Errorf("control Map ABI mismatch: got %d want %d", value.ABIVersion, controlMapABIVersion)
+	}
+	return nil
+}
+
+// ValidateHeartbeatTimeoutNS checks that a lease timeout leaves enough time
+// for normal scheduling and renewal.
+func ValidateHeartbeatTimeoutNS(timeoutNS uint64) error {
+	if timeoutNS < MinHeartbeatTimeoutNS {
+		return fmt.Errorf("heartbeat timeout must be at least %s", time.Duration(MinHeartbeatTimeoutNS))
 	}
 	return nil
 }

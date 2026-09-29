@@ -14,7 +14,7 @@ installationID: install-a
 elfBuildID: build-a
 generation: 1
 heartbeatNS: 1
-heartbeatTimeoutNS: 5
+heartbeatTimeoutNS: 5000000000
 preflight:
   nodeName: node-a
   nodeUID: node-uid

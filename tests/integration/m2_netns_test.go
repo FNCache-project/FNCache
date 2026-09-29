@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cat-cc-Lcos/FNCache/internal/controlplane"
 	"github.com/cat-cc-Lcos/FNCache/internal/datapath"
@@ -428,7 +429,7 @@ func newFirstPassRuntime(t *testing.T, elf, pinRoot, statePath string, desired r
 	}
 	publisher, err := controlplane.NewPublisher(store, control, controlplane.PublishConfig{
 		InstallationID: "m2-integration", NodeUID: "node-b", ELFBuildID: "integration-elf",
-		HeartbeatTimeoutNS: 5,
+		HeartbeatTimeoutNS: uint64(5 * time.Second),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -452,7 +453,7 @@ func initializeControlMap(pinRoot string) error {
 	if err != nil {
 		return err
 	}
-	value := datapath.ControlV1{ABIVersion: 1, HeartbeatTimeoutNS: 500}
+	value := datapath.ControlV1{ABIVersion: 1, HeartbeatTimeoutNS: uint64(5 * time.Second)}
 	if err := control.Update(uint32(0), &value, ebpf.UpdateAny); err != nil {
 		_ = control.Close()
 		return err

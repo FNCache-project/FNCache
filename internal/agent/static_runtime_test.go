@@ -67,8 +67,8 @@ func TestStaticRuntimeCloseIsIdempotent(t *testing.T) {
 }
 
 func TestAcquireRuntimeLockSerializesRuntimes(t *testing.T) {
-	statePath := filepath.Join(t.TempDir(), "state.json")
-	first, err := acquireRuntimeLock(statePath)
+	lockDir := t.TempDir()
+	first, err := acquireRuntimeLock("/sys/fs/bpf/oncache/v1", lockDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestAcquireRuntimeLockSerializesRuntimes(t *testing.T) {
 			_ = first.Close()
 		}
 	})
-	if second, err := acquireRuntimeLock(statePath); err == nil {
+	if second, err := acquireRuntimeLock("/sys/fs/bpf/oncache/v1", lockDir); err == nil {
 		_ = second.Close()
 		t.Fatal("second runtime acquired the lock")
 	}
@@ -86,7 +86,7 @@ func TestAcquireRuntimeLockSerializesRuntimes(t *testing.T) {
 		t.Fatal(err)
 	}
 	firstClosed = true
-	third, err := acquireRuntimeLock(statePath)
+	third, err := acquireRuntimeLock("/sys/fs/bpf/oncache/v1", lockDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,13 +96,12 @@ func TestAcquireRuntimeLockSerializesRuntimes(t *testing.T) {
 }
 
 func TestHeartbeatRenewIntervalUsesThirdOfTimeout(t *testing.T) {
-	interval, err := heartbeatRenewInterval(900)
-	if err != nil || interval != 300*time.Nanosecond {
+	interval, err := heartbeatRenewInterval(900 * uint64(time.Millisecond))
+	if err != nil || interval != 300*time.Millisecond {
 		t.Fatalf("unexpected heartbeat renewal interval: interval=%s err=%v", interval, err)
 	}
-	interval, err = heartbeatRenewInterval(1)
-	if err != nil || interval != time.Nanosecond {
-		t.Fatalf("sub-nanosecond interval was not clamped: interval=%s err=%v", interval, err)
+	if _, err := heartbeatRenewInterval(uint64(time.Millisecond)); err == nil {
+		t.Fatal("sub-minimum timeout was accepted")
 	}
 	if _, err := heartbeatRenewInterval(0); err == nil {
 		t.Fatal("zero timeout was accepted")
@@ -168,7 +167,7 @@ func TestValidateStaticRuntimeConfigDoesNotRequireFixedHeartbeatTimestamp(t *tes
 func validStaticRuntimeConfig() StaticRuntimeConfig {
 	return StaticRuntimeConfig{
 		ELFPath: "/var/lib/oncache/build/FNCache/bpf/tc_prog_kern.o", PinRoot: "/sys/fs/bpf/oncache/v1", StatePath: filepath.Join("/var/lib/oncache/v1", "state.json"),
-		InstallationID: "install-a", ELFBuildID: "build-a", Generation: 1, HeartbeatNS: 1, HeartbeatTimeoutNS: 5,
+		InstallationID: "install-a", ELFBuildID: "build-a", Generation: 1, HeartbeatNS: 1, HeartbeatTimeoutNS: uint64(5 * time.Second),
 		Preflight: discovery.PreflightRequest{Node: resolver.NodeIdentity{Name: "node-a", UID: "node-uid"}, PinRoot: "/sys/fs/bpf/oncache/v1", RuntimeURI: "unix:///run/containerd/containerd.sock", Overlay: "flannel-vxlan"},
 		Flannel:   flannel.DiscoveryRequest{MissMask: 0x04, EstablishedMask: 0x08, IPTablesBackend: "iptables-nft"},
 		Marker:    flannel.MarkerRuleSpec{Chain: "ONCACHE", Comment: "oncache:install-a"},

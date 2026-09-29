@@ -6,9 +6,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cilium/ebpf"
 )
+
+const testHeartbeatTimeoutNS uint64 = uint64(500 * time.Millisecond)
 
 type fakeControlMap struct {
 	value       ControlV1
@@ -152,11 +155,11 @@ func TestControlWriterPublishEnablesNewGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writer.Publish(context.Background(), 42, 500, 3); err != nil {
+	if err := writer.Publish(context.Background(), 42, testHeartbeatTimeoutNS, 3); err != nil {
 		t.Fatal(err)
 	}
 	if fake.updated.Enabled != 1 || fake.updated.Generation != 42 || fake.updated.HeartbeatNS != 100 ||
-		fake.updated.HeartbeatTimeoutNS != 500 || fake.updated.Flags != 3 || fake.updated.Reserved != 0 {
+		fake.updated.HeartbeatTimeoutNS != testHeartbeatTimeoutNS || fake.updated.Flags != 3 || fake.updated.Reserved != 0 {
 		t.Fatalf("unexpected published control state: %+v", fake.updated)
 	}
 }
@@ -173,31 +176,45 @@ func TestControlWriterPublishRejectsInvalidHeartbeat(t *testing.T) {
 }
 
 func TestControlWriterRenewRefreshesHeartbeat(t *testing.T) {
-	fake := &fakeControlMap{value: ControlV1{ABIVersion: 1, Enabled: 1, Generation: 42, HeartbeatNS: 100, HeartbeatTimeoutNS: 500, Flags: 3, Reserved: 7}}
+	fake := &fakeControlMap{value: ControlV1{ABIVersion: 1, Enabled: 1, Generation: 42, HeartbeatNS: 100, HeartbeatTimeoutNS: testHeartbeatTimeoutNS, Flags: 3, Reserved: 7}}
 	writer, err := newControlWriterWithClock(t.TempDir(), func(string) (controlMap, error) { return fake, nil }, func() (uint64, error) { return 200, nil })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writer.Renew(context.Background()); err != nil {
+	if err := writer.Renew(context.Background(), 42); err != nil {
 		t.Fatal(err)
 	}
 	if fake.updated.Enabled != 1 || fake.updated.Generation != 42 || fake.updated.HeartbeatNS != 200 ||
-		fake.updated.HeartbeatTimeoutNS != 500 || fake.updated.Flags != 3 || fake.updated.Reserved != 7 {
+		fake.updated.HeartbeatTimeoutNS != testHeartbeatTimeoutNS || fake.updated.Flags != 3 || fake.updated.Reserved != 7 {
 		t.Fatalf("unexpected renewed control state: %+v", fake.updated)
 	}
 }
 
 func TestControlWriterRenewDisablesExpiredLease(t *testing.T) {
-	fake := &fakeControlMap{value: ControlV1{ABIVersion: 1, Enabled: 1, HeartbeatNS: 100, HeartbeatTimeoutNS: 50}}
-	writer, err := newControlWriterWithClock(t.TempDir(), func(string) (controlMap, error) { return fake, nil }, func() (uint64, error) { return 200, nil })
+	fake := &fakeControlMap{value: ControlV1{ABIVersion: 1, Enabled: 1, Generation: 42, HeartbeatNS: 100, HeartbeatTimeoutNS: testHeartbeatTimeoutNS}}
+	writer, err := newControlWriterWithClock(t.TempDir(), func(string) (controlMap, error) { return fake, nil }, func() (uint64, error) { return testHeartbeatTimeoutNS + 1000, nil })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writer.Renew(context.Background()); err == nil || !strings.Contains(err.Error(), "heartbeat lease expired") {
+	if err := writer.Renew(context.Background(), 42); err == nil || !strings.Contains(err.Error(), "heartbeat lease expired") {
 		t.Fatalf("expired lease was accepted: %v", err)
 	}
 	if fake.updated.Enabled != 0 {
 		t.Fatalf("expired lease remained enabled: %+v", fake.updated)
+	}
+}
+
+func TestControlWriterRenewRejectsGenerationChange(t *testing.T) {
+	fake := &fakeControlMap{value: ControlV1{ABIVersion: 1, Enabled: 1, Generation: 42, HeartbeatNS: 100, HeartbeatTimeoutNS: testHeartbeatTimeoutNS}}
+	writer, err := newControlWriterWithClock(t.TempDir(), func(string) (controlMap, error) { return fake, nil }, func() (uint64, error) { return 200, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Renew(context.Background(), 43); err == nil || !strings.Contains(err.Error(), "generation changed") {
+		t.Fatalf("generation mismatch was accepted: %v", err)
+	}
+	if fake.updateCalls != 0 {
+		t.Fatalf("generation mismatch updated the control Map: calls=%d", fake.updateCalls)
 	}
 }
 
