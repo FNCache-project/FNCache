@@ -148,11 +148,11 @@ func TestControlWriterDisableRejectsInvalidOrUnavailableMap(t *testing.T) {
 
 func TestControlWriterPublishEnablesNewGeneration(t *testing.T) {
 	fake := &fakeControlMap{value: ControlV1{ABIVersion: 1, Enabled: 0, Generation: 4, Flags: 1}}
-	writer, err := newControlWriter(t.TempDir(), func(string) (controlMap, error) { return fake, nil })
+	writer, err := newControlWriterWithClock(t.TempDir(), func(string) (controlMap, error) { return fake, nil }, func() (uint64, error) { return 100, nil })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writer.Publish(context.Background(), 42, 100, 500, 3); err != nil {
+	if err := writer.Publish(context.Background(), 42, 500, 3); err != nil {
 		t.Fatal(err)
 	}
 	if fake.updated.Enabled != 1 || fake.updated.Generation != 42 || fake.updated.HeartbeatNS != 100 ||
@@ -167,8 +167,37 @@ func TestControlWriterPublishRejectsInvalidHeartbeat(t *testing.T) {
 		called = true
 		return &fakeControlMap{value: ControlV1{ABIVersion: 1}}, nil
 	})
-	if err := writer.Publish(context.Background(), 1, 0, 500, 0); err == nil || called {
+	if err := writer.Publish(context.Background(), 1, 0, 0); err == nil || called {
 		t.Fatalf("invalid heartbeat was accepted: err=%v called=%v", err, called)
+	}
+}
+
+func TestControlWriterRenewRefreshesHeartbeat(t *testing.T) {
+	fake := &fakeControlMap{value: ControlV1{ABIVersion: 1, Enabled: 1, Generation: 42, HeartbeatNS: 100, HeartbeatTimeoutNS: 500, Flags: 3, Reserved: 7}}
+	writer, err := newControlWriterWithClock(t.TempDir(), func(string) (controlMap, error) { return fake, nil }, func() (uint64, error) { return 200, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Renew(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if fake.updated.Enabled != 1 || fake.updated.Generation != 42 || fake.updated.HeartbeatNS != 200 ||
+		fake.updated.HeartbeatTimeoutNS != 500 || fake.updated.Flags != 3 || fake.updated.Reserved != 7 {
+		t.Fatalf("unexpected renewed control state: %+v", fake.updated)
+	}
+}
+
+func TestControlWriterRenewDisablesExpiredLease(t *testing.T) {
+	fake := &fakeControlMap{value: ControlV1{ABIVersion: 1, Enabled: 1, HeartbeatNS: 100, HeartbeatTimeoutNS: 50}}
+	writer, err := newControlWriterWithClock(t.TempDir(), func(string) (controlMap, error) { return fake, nil }, func() (uint64, error) { return 200, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Renew(context.Background()); err == nil || !strings.Contains(err.Error(), "heartbeat lease expired") {
+		t.Fatalf("expired lease was accepted: %v", err)
+	}
+	if fake.updated.Enabled != 0 {
+		t.Fatalf("expired lease remained enabled: %+v", fake.updated)
 	}
 }
 

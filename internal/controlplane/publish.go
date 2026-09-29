@@ -16,14 +16,13 @@ type OwnershipCommitter interface {
 }
 
 type ControlPublisher interface {
-	Publish(context.Context, uint64, uint64, uint64, uint32) error
+	Publish(context.Context, uint64, uint64, uint32) error
 }
 
 type PublishConfig struct {
 	InstallationID     string
 	NodeUID            string
 	ELFBuildID         string
-	HeartbeatNS        uint64
 	HeartbeatTimeoutNS uint64
 	Flags              uint32
 	Now                func() time.Time
@@ -42,8 +41,8 @@ func NewPublisher(store OwnershipCommitter, control ControlPublisher, config Pub
 	if config.InstallationID == "" || config.NodeUID == "" || config.ELFBuildID == "" {
 		return nil, fmt.Errorf("installation ID, node UID and ELF build ID are required")
 	}
-	if config.HeartbeatNS == 0 || config.HeartbeatTimeoutNS == 0 {
-		return nil, fmt.Errorf("heartbeat values must be non-zero")
+	if config.HeartbeatTimeoutNS == 0 {
+		return nil, fmt.Errorf("heartbeat timeout must be non-zero")
 	}
 	if config.Now == nil {
 		config.Now = time.Now
@@ -59,7 +58,7 @@ func (p *Publisher) CommitAndPublish(ctx context.Context, desired reconcile.Desi
 	if err := p.store.Commit(ctx, state); err != nil {
 		return fmt.Errorf("commit ownership: %w", err)
 	}
-	if err := p.control.Publish(ctx, desired.Generation, p.config.HeartbeatNS, p.config.HeartbeatTimeoutNS, p.config.Flags); err != nil {
+	if err := p.control.Publish(ctx, desired.Generation, p.config.HeartbeatTimeoutNS, p.config.Flags); err != nil {
 		return fmt.Errorf("publish generation %d: %w", desired.Generation, err)
 	}
 	return nil

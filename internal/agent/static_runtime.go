@@ -2,11 +2,13 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/cat-cc-Lcos/FNCache/internal/controlplane"
 	"github.com/cat-cc-Lcos/FNCache/internal/datapath"
@@ -15,15 +17,18 @@ import (
 	"github.com/cat-cc-Lcos/FNCache/internal/ownership"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
 	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
+	"golang.org/x/sys/unix"
 )
 
 type StaticRuntimeConfig struct {
-	ELFPath            string
-	PinRoot            string
-	StatePath          string
-	InstallationID     string
-	ELFBuildID         string
-	Generation         uint64
+	ELFPath        string
+	PinRoot        string
+	StatePath      string
+	InstallationID string
+	ELFBuildID     string
+	Generation     uint64
+	// HeartbeatNS is retained for manifest compatibility; the datapath writer
+	// now obtains the timestamp from CLOCK_MONOTONIC at publish time.
 	HeartbeatNS        uint64
 	HeartbeatTimeoutNS uint64
 	Flags              uint32
@@ -37,6 +42,7 @@ type StaticRuntimeConfig struct {
 type StaticRuntime struct {
 	config          StaticRuntimeConfig
 	cri             io.Closer
+	lock            *os.File
 	endpointScanner *resolver.EndpointScanner
 	pins            *datapath.PinScanner
 	tcScanner       *datapath.TCScanner
@@ -54,14 +60,20 @@ func NewStaticRuntime(ctx context.Context, config StaticRuntimeConfig) (*StaticR
 	if err := validateStaticRuntimeConfig(config); err != nil {
 		return nil, err
 	}
+	lock, err := acquireRuntimeLock(config.StatePath)
+	if err != nil {
+		return nil, err
+	}
 	sandbox, cri, err := resolver.DialContainerdCRI(ctx, config.Preflight.RuntimeURI)
 	if err != nil {
+		_ = lock.Close()
 		return nil, err
 	}
 	ok := false
 	defer func() {
 		if !ok {
 			_ = cri.Close()
+			_ = lock.Close()
 		}
 	}()
 
@@ -127,7 +139,7 @@ func NewStaticRuntime(ctx context.Context, config StaticRuntimeConfig) (*StaticR
 	}
 	publisher, err := controlplane.NewPublisher(store, controlWriter, controlplane.PublishConfig{
 		InstallationID: config.InstallationID, NodeUID: config.Preflight.Node.UID, ELFBuildID: config.ELFBuildID,
-		HeartbeatNS: config.HeartbeatNS, HeartbeatTimeoutNS: config.HeartbeatTimeoutNS, Flags: config.Flags,
+		HeartbeatTimeoutNS: config.HeartbeatTimeoutNS, Flags: config.Flags,
 	})
 	if err != nil {
 		return nil, err
@@ -136,7 +148,7 @@ func NewStaticRuntime(ctx context.Context, config StaticRuntimeConfig) (*StaticR
 	flannelSource := flannel.NewDiscovery(nil)
 	ruleScanner := flannel.NewRuleScanner(nil)
 	runtime := &StaticRuntime{
-		config: config, cri: cri, endpointScanner: endpointScanner, pins: pins, tcScanner: tcScanner,
+		config: config, cri: cri, lock: lock, endpointScanner: endpointScanner, pins: pins, tcScanner: tcScanner,
 		sources: controlplane.Sources{Preflight: preflight, Flannel: flannelSource, Endpoints: endpointScanner, Pins: pins, TC: tcScanner, Rules: ruleScanner},
 		control: &runtimeControl{pinRoot: config.PinRoot, writer: controlWriter}, collection: collection, marker: marker,
 		base: base, endpoint: endpoint, maps: maps, publisher: publisher,
@@ -146,12 +158,54 @@ func NewStaticRuntime(ctx context.Context, config StaticRuntimeConfig) (*StaticR
 }
 
 func (r *StaticRuntime) RunOnce(ctx context.Context) (reconcile.ReconcileResult, error) {
+	result, _, err := r.reconcileOnce(ctx)
+	if err != nil {
+		return result, err
+	}
+	if err := r.disableForShutdown(); err != nil {
+		return result, fmt.Errorf("disable fast path after one-shot reconcile: %w", err)
+	}
+	result.State = reconcile.AgentDisabled
+	return result, nil
+}
+
+// Run reconciles once, then keeps the published control Map lease alive until
+// the context is canceled or the lease can no longer be renewed.
+func (r *StaticRuntime) Run(ctx context.Context) (reconcile.ReconcileResult, error) {
+	result, coordinator, err := r.reconcileOnce(ctx)
+	if err != nil {
+		return result, err
+	}
+	interval, err := heartbeatRenewInterval(r.config.HeartbeatTimeoutNS)
+	if err != nil {
+		coordinator.MarkDegraded()
+		result.State = coordinator.State()
+		if disableErr := r.disableForShutdown(); disableErr != nil {
+			return result, fmt.Errorf("configure heartbeat renewal: %v; disable fast path: %w", err, disableErr)
+		}
+		return result, fmt.Errorf("configure heartbeat renewal: %w", err)
+	}
+	if err := runHeartbeatLease(ctx, interval, r.control.Renew, r.control.Disable); err != nil {
+		if ctx.Err() != nil {
+			coordinator.MarkStopping()
+		} else {
+			coordinator.MarkDegraded()
+		}
+		result.State = coordinator.State()
+		return result, err
+	}
+	coordinator.MarkStopping()
+	result.State = coordinator.State()
+	return result, nil
+}
+
+func (r *StaticRuntime) reconcileOnce(ctx context.Context) (reconcile.ReconcileResult, *reconcile.Coordinator, error) {
 	if err := ctx.Err(); err != nil {
-		return reconcile.ReconcileResult{}, err
+		return reconcile.ReconcileResult{}, nil, err
 	}
 	endpoints, err := r.endpointScanner.Scan(ctx, r.config.Pods)
 	if err != nil {
-		return reconcile.ReconcileResult{}, fmt.Errorf("prepare endpoint links: %w", err)
+		return reconcile.ReconcileResult{}, nil, fmt.Errorf("prepare endpoint links: %w", err)
 	}
 	links := mergeEndpointLinks(r.config.TCLinks, endpoints.Endpoints)
 	observer, err := controlplane.NewObserver(r.sources, controlplane.ObservationInput{
@@ -159,29 +213,41 @@ func (r *StaticRuntime) RunOnce(ctx context.Context) (reconcile.ReconcileResult,
 		MarkerRule: r.config.Marker, Pods: r.config.Pods, TCLinks: links,
 	})
 	if err != nil {
-		return reconcile.ReconcileResult{}, err
+		return reconcile.ReconcileResult{}, nil, err
 	}
 	backend, err := controlplane.NewFirstPassBackend(controlplane.FirstPassBackendConfig{
 		Observer: observer, Control: r.control, Collection: r.collection, Marker: r.marker,
 		Base: r.base, Endpoint: r.endpoint, Maps: r.maps, Publisher: r.publisher,
 	})
 	if err != nil {
-		return reconcile.ReconcileResult{}, err
+		return reconcile.ReconcileResult{}, nil, err
 	}
 	coordinator, err := reconcile.NewCoordinator(backend)
 	if err != nil {
-		return reconcile.ReconcileResult{}, err
+		return reconcile.ReconcileResult{}, nil, err
 	}
-	return coordinator.FullReconcile(ctx)
+	result, err := coordinator.FullReconcile(ctx)
+	return result, coordinator, err
 }
 
 func (r *StaticRuntime) Close() error {
-	if r == nil || r.cri == nil {
+	if r == nil {
 		return nil
 	}
-	err := r.cri.Close()
-	r.cri = nil
-	return err
+	var closeErrs []error
+	if r.cri != nil {
+		if err := r.cri.Close(); err != nil {
+			closeErrs = append(closeErrs, err)
+		}
+		r.cri = nil
+	}
+	if r.lock != nil {
+		if err := r.lock.Close(); err != nil {
+			closeErrs = append(closeErrs, err)
+		}
+		r.lock = nil
+	}
+	return errors.Join(closeErrs...)
 }
 
 type runtimeControl struct {
@@ -199,8 +265,82 @@ func (c *runtimeControl) Disable(ctx context.Context) error {
 	return c.writer.Disable(ctx)
 }
 
-func (c *runtimeControl) Publish(ctx context.Context, generation, heartbeatNS, heartbeatTimeoutNS uint64, flags uint32) error {
-	return c.writer.Publish(ctx, generation, heartbeatNS, heartbeatTimeoutNS, flags)
+func (c *runtimeControl) Publish(ctx context.Context, generation, heartbeatTimeoutNS uint64, flags uint32) error {
+	return c.writer.Publish(ctx, generation, heartbeatTimeoutNS, flags)
+}
+
+func (c *runtimeControl) Renew(ctx context.Context) error {
+	return c.writer.Renew(ctx)
+}
+
+func (r *StaticRuntime) disableForShutdown() error {
+	return disableWithTimeout(r.control.Disable)
+}
+
+func acquireRuntimeLock(statePath string) (*os.File, error) {
+	lockPath := statePath + ".lock"
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0750); err != nil {
+		return nil, fmt.Errorf("create runtime lock directory: %w", err)
+	}
+	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, fmt.Errorf("open runtime lock: %w", err)
+	}
+	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		_ = lock.Close()
+		if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
+			return nil, fmt.Errorf("static runtime is already running")
+		}
+		return nil, fmt.Errorf("acquire runtime lock: %w", err)
+	}
+	return lock, nil
+}
+
+func disableWithTimeout(disable func(context.Context) error) error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	return disable(ctx)
+}
+
+func runHeartbeatLease(ctx context.Context, interval time.Duration, renew func(context.Context) error, disable func(context.Context) error) error {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			if err := disableWithTimeout(disable); err != nil {
+				return fmt.Errorf("disable fast path on shutdown: %w", err)
+			}
+			return nil
+		case <-ticker.C:
+			if err := renew(ctx); err != nil {
+				if ctx.Err() != nil {
+					if disableErr := disableWithTimeout(disable); disableErr != nil {
+						return fmt.Errorf("disable fast path on shutdown: %w", disableErr)
+					}
+					return nil
+				}
+				if disableErr := disableWithTimeout(disable); disableErr != nil {
+					return fmt.Errorf("renew heartbeat: %v; disable fast path: %w", err, disableErr)
+				}
+				return fmt.Errorf("renew heartbeat: %w", err)
+			}
+		}
+	}
+}
+
+func heartbeatRenewInterval(timeoutNS uint64) (time.Duration, error) {
+	if timeoutNS == 0 {
+		return 0, fmt.Errorf("heartbeat timeout must be non-zero")
+	}
+	intervalNS := timeoutNS / 3
+	if intervalNS == 0 {
+		intervalNS = 1
+	}
+	if intervalNS > uint64(1<<63-1) {
+		return 0, fmt.Errorf("heartbeat timeout is too large")
+	}
+	return time.Duration(intervalNS), nil
 }
 
 func validateStaticRuntimeConfig(config StaticRuntimeConfig) error {
@@ -219,8 +359,11 @@ func validateStaticRuntimeConfig(config StaticRuntimeConfig) error {
 	if config.Preflight.Node.Name == "" || config.Preflight.Node.UID == "" || config.Preflight.RuntimeURI == "" {
 		return fmt.Errorf("node identity and runtime endpoint are required")
 	}
-	if config.InstallationID == "" || config.ELFBuildID == "" || config.HeartbeatNS == 0 || config.HeartbeatTimeoutNS == 0 {
+	if config.InstallationID == "" || config.ELFBuildID == "" || config.HeartbeatTimeoutNS == 0 {
 		return fmt.Errorf("installation, ELF build and heartbeat values are required")
+	}
+	if _, err := heartbeatRenewInterval(config.HeartbeatTimeoutNS); err != nil {
+		return err
 	}
 	if len(config.TCLinks) == 0 {
 		return fmt.Errorf("at least one TC link is required")

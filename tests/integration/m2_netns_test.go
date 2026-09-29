@@ -378,8 +378,8 @@ func (c *integrationControl) Disable(ctx context.Context) error {
 	return c.writer.Disable(ctx)
 }
 
-func (c *integrationControl) Publish(ctx context.Context, generation, heartbeatNS, heartbeatTimeoutNS uint64, flags uint32) error {
-	return c.writer.Publish(ctx, generation, heartbeatNS, heartbeatTimeoutNS, flags)
+func (c *integrationControl) Publish(ctx context.Context, generation, heartbeatTimeoutNS uint64, flags uint32) error {
+	return c.writer.Publish(ctx, generation, heartbeatTimeoutNS, flags)
 }
 
 func newFirstPassRuntime(t *testing.T, elf, pinRoot, statePath string, desired reconcile.DesiredState, link resolver.LinkIdentity) *firstPassRuntime {
@@ -428,7 +428,7 @@ func newFirstPassRuntime(t *testing.T, elf, pinRoot, statePath string, desired r
 	}
 	publisher, err := controlplane.NewPublisher(store, control, controlplane.PublishConfig{
 		InstallationID: "m2-integration", NodeUID: "node-b", ELFBuildID: "integration-elf",
-		HeartbeatNS: 1, HeartbeatTimeoutNS: 5,
+		HeartbeatTimeoutNS: 5,
 	})
 	if err != nil {
 		t.Fatal(err)

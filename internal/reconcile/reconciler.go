@@ -43,6 +43,18 @@ func (c *Coordinator) State() AgentState {
 	return c.state
 }
 
+// MarkDegraded records that the published datapath lease is no longer
+// healthy, without running another reconciliation pass.
+func (c *Coordinator) MarkDegraded() {
+	c.setState(AgentDegraded)
+}
+
+// MarkStopping records an orderly shutdown after the datapath has been
+// disabled.
+func (c *Coordinator) MarkStopping() {
+	c.setState(AgentStopping)
+}
+
 func (c *Coordinator) FullReconcile(ctx context.Context) (ReconcileResult, error) {
 	result := ReconcileResult{State: c.State()}
 	if err := ctx.Err(); err != nil {

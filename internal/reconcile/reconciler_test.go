@@ -155,3 +155,18 @@ func TestCoordinatorRecoversAfterFailedReconcile(t *testing.T) {
 		t.Fatalf("coordinator did not recover: result=%+v err=%v", result, err)
 	}
 }
+
+func TestCoordinatorTracksLeaseHealthAndShutdown(t *testing.T) {
+	coordinator, err := NewCoordinator(&fakeBackend{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.MarkDegraded()
+	if coordinator.State() != AgentDegraded {
+		t.Fatalf("coordinator did not enter degraded state: %s", coordinator.State())
+	}
+	coordinator.MarkStopping()
+	if coordinator.State() != AgentStopping {
+		t.Fatalf("coordinator did not enter stopping state: %s", coordinator.State())
+	}
+}

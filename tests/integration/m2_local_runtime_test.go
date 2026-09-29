@@ -125,9 +125,13 @@ func runStaticAgent(t *testing.T) {
 	t.Helper()
 	agent := requiredEnv(t, "ONCACHE_AGENT_BIN")
 	manifest := requiredEnv(t, "ONCACHE_STATIC_MANIFEST")
-	output, err := exec.Command(agent, "-static-config", manifest).CombinedOutput()
+	output, err := exec.Command(agent, "-static-config", manifest, "-once").CombinedOutput()
 	if err != nil {
 		t.Fatalf("static agent failed: %v\n%s", err, output)
+	}
+	control := commandOutput(t, "bpftool", "map", "dump", "pinned", filepath.Join(requiredEnv(t, "ONCACHE_M2_PIN_ROOT"), "maps", "control_map"))
+	if !strings.Contains(control, `"enabled": 0`) {
+		t.Fatalf("one-shot static agent left fast path enabled: %s", control)
 	}
 }
 

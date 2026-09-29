@@ -180,5 +180,5 @@ func (b *FirstPassBackend) Commit(ctx context.Context, desired reconcile.Desired
 
 func (b *FirstPassBackend) Publish(ctx context.Context, desired reconcile.DesiredState) error {
 	config := b.publisher.config
-	return b.publisher.control.Publish(ctx, desired.Generation, config.HeartbeatNS, config.HeartbeatTimeoutNS, config.Flags)
+	return b.publisher.control.Publish(ctx, desired.Generation, config.HeartbeatTimeoutNS, config.Flags)
 }

@@ -29,15 +29,15 @@ func (f *fakeOwnershipCommitter) Commit(_ context.Context, state reconcile.Owner
 }
 
 type fakeControlPublisher struct {
-	events                         *[]string
-	generation, heartbeat, timeout uint64
-	flags                          uint32
-	err                            error
+	events              *[]string
+	generation, timeout uint64
+	flags               uint32
+	err                 error
 }
 
-func (f *fakeControlPublisher) Publish(_ context.Context, generation, heartbeat, timeout uint64, flags uint32) error {
+func (f *fakeControlPublisher) Publish(_ context.Context, generation, timeout uint64, flags uint32) error {
 	*f.events = append(*f.events, "publish")
-	f.generation, f.heartbeat, f.timeout, f.flags = generation, heartbeat, timeout, flags
+	f.generation, f.timeout, f.flags = generation, timeout, flags
 	return f.err
 }
 
@@ -66,7 +66,7 @@ func TestPublisherCommitsOwnershipBeforePublishing(t *testing.T) {
 	control := &fakeControlPublisher{events: &events}
 	publisher, err := NewPublisher(store, control, PublishConfig{
 		InstallationID: "install-a", NodeUID: "node-a", ELFBuildID: "sha256:build",
-		HeartbeatNS: 100, HeartbeatTimeoutNS: 500, Flags: 3, Now: func() time.Time { return time.Unix(42, 0).UTC() },
+		HeartbeatTimeoutNS: 500, Flags: 3, Now: func() time.Time { return time.Unix(42, 0).UTC() },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -81,8 +81,8 @@ func TestPublisherCommitsOwnershipBeforePublishing(t *testing.T) {
 		store.state.ABI != reconcile.BPFABIVersion || store.state.LastCommittedAt.Unix() != 42 || len(store.state.Endpoints) != 1 {
 		t.Fatalf("unexpected ownership state: %+v", store.state)
 	}
-	if control.generation != 7 || control.heartbeat != 100 || control.timeout != 500 || control.flags != 3 {
-		t.Fatalf("unexpected control publish: generation=%d heartbeat=%d timeout=%d flags=%d", control.generation, control.heartbeat, control.timeout, control.flags)
+	if control.generation != 7 || control.timeout != 500 || control.flags != 3 {
+		t.Fatalf("unexpected control publish: generation=%d timeout=%d flags=%d", control.generation, control.timeout, control.flags)
 	}
 }
 
@@ -124,7 +124,7 @@ func TestPublisherKeepsFailureWhenControlPublishFails(t *testing.T) {
 }
 
 func publishTestConfig() PublishConfig {
-	return PublishConfig{InstallationID: "install-a", NodeUID: "node-a", ELFBuildID: "sha256:build", HeartbeatNS: 100, HeartbeatTimeoutNS: 500, Now: func() time.Time { return time.Unix(42, 0).UTC() }}
+	return PublishConfig{InstallationID: "install-a", NodeUID: "node-a", ELFBuildID: "sha256:build", HeartbeatTimeoutNS: 500, Now: func() time.Time { return time.Unix(42, 0).UTC() }}
 }
 
 func publishTestDesired() reconcile.DesiredState {

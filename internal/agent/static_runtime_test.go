@@ -1,10 +1,12 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"net/netip"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/cat-cc-Lcos/FNCache/internal/discovery"
 	"github.com/cat-cc-Lcos/FNCache/internal/overlay/flannel"
@@ -61,6 +63,105 @@ func TestStaticRuntimeCloseIsIdempotent(t *testing.T) {
 	}
 	if err := runtime.Close(); err != nil {
 		t.Fatalf("second close failed: %v", err)
+	}
+}
+
+func TestAcquireRuntimeLockSerializesRuntimes(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	first, err := acquireRuntimeLock(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstClosed := false
+	t.Cleanup(func() {
+		if !firstClosed {
+			_ = first.Close()
+		}
+	})
+	if second, err := acquireRuntimeLock(statePath); err == nil {
+		_ = second.Close()
+		t.Fatal("second runtime acquired the lock")
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	firstClosed = true
+	third, err := acquireRuntimeLock(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := third.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHeartbeatRenewIntervalUsesThirdOfTimeout(t *testing.T) {
+	interval, err := heartbeatRenewInterval(900)
+	if err != nil || interval != 300*time.Nanosecond {
+		t.Fatalf("unexpected heartbeat renewal interval: interval=%s err=%v", interval, err)
+	}
+	interval, err = heartbeatRenewInterval(1)
+	if err != nil || interval != time.Nanosecond {
+		t.Fatalf("sub-nanosecond interval was not clamped: interval=%s err=%v", interval, err)
+	}
+	if _, err := heartbeatRenewInterval(0); err == nil {
+		t.Fatal("zero timeout was accepted")
+	}
+}
+
+func TestRunHeartbeatLeaseRenewsUntilCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	renewed := make(chan struct{}, 1)
+	disabled := make(chan struct{}, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- runHeartbeatLease(ctx, time.Millisecond, func(context.Context) error {
+			select {
+			case renewed <- struct{}{}:
+			default:
+			}
+			return nil
+		}, func(context.Context) error {
+			disabled <- struct{}{}
+			return nil
+		})
+	}()
+	select {
+	case <-renewed:
+	case <-time.After(time.Second):
+		t.Fatal("heartbeat was not renewed")
+	}
+	cancel()
+	select {
+	case <-disabled:
+	case <-time.After(time.Second):
+		t.Fatal("fast path was not disabled on shutdown")
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("heartbeat lease returned an error on shutdown: %v", err)
+	}
+}
+
+func TestRunHeartbeatLeaseDisablesAfterRenewFailure(t *testing.T) {
+	wantErr := errors.New("renew failed")
+	disabled := false
+	err := runHeartbeatLease(context.Background(), time.Millisecond, func(context.Context) error {
+		return wantErr
+	}, func(context.Context) error {
+		disabled = true
+		return nil
+	})
+	if err == nil || !errors.Is(err, wantErr) || !disabled {
+		t.Fatalf("renewal failure was not handled safely: err=%v disabled=%v", err, disabled)
+	}
+}
+
+func TestValidateStaticRuntimeConfigDoesNotRequireFixedHeartbeatTimestamp(t *testing.T) {
+	config := validStaticRuntimeConfig()
+	config.HeartbeatNS = 0
+	if err := validateStaticRuntimeConfig(config); err != nil {
+		t.Fatalf("fixed heartbeat timestamp was still required: %v", err)
 	}
 }
 
