@@ -73,7 +73,7 @@ func (d *Discovery) Discover(ctx context.Context, req DiscoveryRequest) (Flannel
 	}
 	vxlanLink := vxlan[0]
 	underlayName := req.UnderlayDevice
-	if underlayName == "" {
+	if underlayName == "" || underlayName == "auto" {
 		underlayName = vxlanLink.Link
 	}
 	if underlayName == "" {
