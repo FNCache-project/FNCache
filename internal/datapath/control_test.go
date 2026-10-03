@@ -206,6 +206,37 @@ func TestControlWriterPublishEnablesNewGeneration(t *testing.T) {
 	}
 }
 
+func TestControlWriterRefreshHeartbeatPreservesEnabledState(t *testing.T) {
+	mapValue := ControlV1{ABIVersion: 1, Enabled: 1, Generation: 42, HeartbeatNS: 100, HeartbeatTimeoutNS: 500, Flags: 3, Reserved: 7}
+	fake := &fakeControlMap{value: mapValue}
+	writer, err := newControlWriter(t.TempDir(), func(string) (controlMap, error) { return fake, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.RefreshHeartbeat(context.Background(), 200); err != nil {
+		t.Fatal(err)
+	}
+	want := mapValue
+	want.HeartbeatNS = 200
+	if fake.updated != want || fake.lookupCalls != 1 || fake.updateCalls != 1 || fake.closeCalls != 1 {
+		t.Fatalf("unexpected refreshed control state: got=%+v want=%+v calls=%d/%d/%d", fake.updated, want, fake.lookupCalls, fake.updateCalls, fake.closeCalls)
+	}
+}
+
+func TestControlWriterRefreshHeartbeatDoesNotEnableDisabledMap(t *testing.T) {
+	fake := &fakeControlMap{value: ControlV1{ABIVersion: 1, Enabled: 0, HeartbeatNS: 100, HeartbeatTimeoutNS: 500}}
+	writer, err := newControlWriter(t.TempDir(), func(string) (controlMap, error) { return fake, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.RefreshHeartbeat(context.Background(), 200); err != nil {
+		t.Fatal(err)
+	}
+	if fake.updateCalls != 0 || fake.closeCalls != 1 {
+		t.Fatalf("disabled control map was updated: updates=%d closes=%d", fake.updateCalls, fake.closeCalls)
+	}
+}
+
 func TestControlWriterPublishRejectsInvalidHeartbeat(t *testing.T) {
 	called := false
 	writer, _ := newControlWriter(t.TempDir(), func(string) (controlMap, error) {

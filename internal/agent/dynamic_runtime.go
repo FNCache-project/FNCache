@@ -39,6 +39,40 @@ type dynamicObservationBackend struct {
 	observer *DynamicObserver
 }
 
+type heartbeatRefresher interface {
+	RefreshHeartbeat(context.Context, uint64) error
+}
+
+func runDynamicHeartbeat(ctx context.Context, interval time.Duration, refresher heartbeatRefresher) {
+	if interval <= 0 || refresher == nil {
+		return
+	}
+	refresh := func() {
+		if ctx.Err() != nil {
+			return
+		}
+		heartbeat, err := monotonicNowNS()
+		if err != nil {
+			return
+		}
+		// A failed refresh deliberately leaves the BPF fast path fail-safe;
+		// the next tick gets another opportunity to refresh it.
+		_ = refresher.RefreshHeartbeat(ctx, heartbeat)
+	}
+
+	refresh()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			refresh()
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
 func (b dynamicObservationBackend) Discover(ctx context.Context) (reconcile.DesiredState, error) {
 	return b.observer.Desired(ctx)
 }
@@ -113,6 +147,11 @@ func (r *DynamicRuntime) Run(ctx context.Context) error {
 		_ = r.components.Close()
 		return fmt.Errorf("initial dynamic full reconcile: %w", err)
 	}
+	heartbeatDone := make(chan struct{})
+	go func() {
+		defer close(heartbeatDone)
+		runDynamicHeartbeat(ctx, time.Duration(r.config.Heartbeat.Interval), r.components.publisher)
+	}()
 	go r.resync.Run(ctx)
 	workerDone := make(chan struct{})
 	go func() {
@@ -122,6 +161,7 @@ func (r *DynamicRuntime) Run(ctx context.Context) error {
 	<-ctx.Done()
 	r.queue.ShutDown()
 	<-workerDone
+	<-heartbeatDone
 	if r.components != nil {
 		return r.components.Close()
 	}
