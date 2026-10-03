@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sync"
 
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
 	"github.com/cilium/ebpf"
@@ -47,6 +48,7 @@ func readControlState(control controlMap) (reconcile.ControlState, error) {
 type ControlWriter struct {
 	pinRoot string
 	open    controlMapOpener
+	mu      sync.Mutex
 }
 
 func NewControlWriter(pinRoot string) (*ControlWriter, error) {
@@ -67,6 +69,8 @@ func (w *ControlWriter) Disable(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	path := filepath.Join(w.pinRoot, "maps", "control_map")
 	control, err := w.open(path)
 	if err != nil {
@@ -97,6 +101,8 @@ func (w *ControlWriter) Initialize(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	path := filepath.Join(w.pinRoot, "maps", "control_map")
 	control, err := w.open(path)
 	if err != nil {
@@ -126,6 +132,8 @@ func (w *ControlWriter) Publish(ctx context.Context, generation, heartbeatNS, he
 	if heartbeatNS == 0 || heartbeatTimeoutNS == 0 {
 		return fmt.Errorf("heartbeat values must be non-zero")
 	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	path := filepath.Join(w.pinRoot, "maps", "control_map")
 	control, err := w.open(path)
 	if err != nil {
@@ -149,6 +157,41 @@ func (w *ControlWriter) Publish(ctx context.Context, generation, heartbeatNS, he
 	value.Reserved = 0
 	if err := control.Update(key, &value, ebpf.UpdateAny); err != nil {
 		return fmt.Errorf("publish fast path: %w", err)
+	}
+	return nil
+}
+
+func (w *ControlWriter) RefreshHeartbeat(ctx context.Context, heartbeatNS uint64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if heartbeatNS == 0 {
+		return fmt.Errorf("heartbeat value must be non-zero")
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	path := filepath.Join(w.pinRoot, "maps", "control_map")
+	control, err := w.open(path)
+	if err != nil {
+		return fmt.Errorf("open control Map: %w", err)
+	}
+	defer func() { _ = control.Close() }()
+
+	key := uint32(0)
+	var value ControlV1
+	if err := control.Lookup(key, &value); err != nil {
+		return fmt.Errorf("read control Map: %w", err)
+	}
+	if err := validateControlValue(value); err != nil {
+		return err
+	}
+	if value.Enabled != 1 {
+		return nil
+	}
+	value.HeartbeatNS = heartbeatNS
+	if err := control.Update(key, &value, ebpf.UpdateAny); err != nil {
+		return fmt.Errorf("refresh heartbeat: %w", err)
 	}
 	return nil
 }

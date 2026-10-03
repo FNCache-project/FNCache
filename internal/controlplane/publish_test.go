@@ -45,6 +45,30 @@ func (f *fakeControlPublisher) Publish(_ context.Context, generation, heartbeat,
 	return f.err
 }
 
+func (f *fakeControlPublisher) RefreshHeartbeat(_ context.Context, heartbeat uint64) error {
+	*f.events = append(*f.events, "heartbeat")
+	f.heartbeat = heartbeat
+	return nil
+}
+
+func TestPublisherRefreshHeartbeatUpdatesSubsequentPublish(t *testing.T) {
+	events := []string{}
+	control := &fakeControlPublisher{events: &events}
+	publisher, err := NewPublisher(&fakeOwnershipCommitter{events: &events}, control, publishTestConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publisher.RefreshHeartbeat(context.Background(), 200); err != nil {
+		t.Fatal(err)
+	}
+	if err := publisher.publishControl(context.Background(), 7); err != nil {
+		t.Fatal(err)
+	}
+	if control.heartbeat != 200 || len(events) != 2 || events[0] != "heartbeat" || events[1] != "publish" {
+		t.Fatalf("heartbeat was not carried into publish: heartbeat=%d events=%v", control.heartbeat, events)
+	}
+}
+
 func TestVerifyStateRequiresCompleteVerifiedObjects(t *testing.T) {
 	desired := publishTestDesired()
 	actual := publishTestActual(desired)

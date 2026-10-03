@@ -31,9 +31,18 @@ type dynamicRuntimeCommitter struct{}
 
 func (dynamicRuntimeCommitter) Commit(context.Context, reconcile.OwnershipState) error { return nil }
 
-type dynamicRuntimePublisherControl struct{}
+type dynamicRuntimePublisherControl struct {
+	refreshCalls  atomic.Int32
+	lastHeartbeat atomic.Uint64
+}
 
-func (dynamicRuntimePublisherControl) Publish(context.Context, uint64, uint64, uint64, uint32) error {
+func (*dynamicRuntimePublisherControl) Publish(context.Context, uint64, uint64, uint64, uint32) error {
+	return nil
+}
+
+func (c *dynamicRuntimePublisherControl) RefreshHeartbeat(_ context.Context, heartbeat uint64) error {
+	c.refreshCalls.Add(1)
+	c.lastHeartbeat.Store(heartbeat)
 	return nil
 }
 
@@ -109,11 +118,35 @@ func (dynamicRuntimeScanTC) Scan(context.Context, []resolver.LinkIdentity) (reco
 
 func dynamicRuntimePublisher(t *testing.T) *controlplane.Publisher {
 	t.Helper()
-	publisher, err := controlplane.NewPublisher(dynamicRuntimeCommitter{}, dynamicRuntimePublisherControl{}, controlplane.PublishConfig{InstallationID: "install", NodeUID: "node-a", ELFBuildID: "sha256:test", HeartbeatNS: 1, HeartbeatTimeoutNS: 5})
+	publisher, err := controlplane.NewPublisher(dynamicRuntimeCommitter{}, &dynamicRuntimePublisherControl{}, controlplane.PublishConfig{InstallationID: "install", NodeUID: "node-a", ELFBuildID: "sha256:test", HeartbeatNS: 1, HeartbeatTimeoutNS: 5})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return publisher
+}
+
+func TestRunDynamicHeartbeatRefreshesPeriodically(t *testing.T) {
+	refresher := &dynamicRuntimePublisherControl{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		runDynamicHeartbeat(ctx, time.Millisecond, refresher)
+		close(done)
+	}()
+	deadline := time.Now().Add(time.Second)
+	for refresher.refreshCalls.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if refresher.refreshCalls.Load() < 2 || refresher.lastHeartbeat.Load() == 0 {
+		t.Fatal("dynamic heartbeat was not refreshed periodically")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("dynamic heartbeat did not stop after cancellation")
+	}
 }
 
 func dynamicTestConfig() config.AgentConfiguration {

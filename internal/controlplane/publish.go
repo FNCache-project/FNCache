@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/cat-cc-Lcos/FNCache/internal/datapath"
@@ -17,6 +18,10 @@ type OwnershipCommitter interface {
 
 type ControlPublisher interface {
 	Publish(context.Context, uint64, uint64, uint64, uint32) error
+}
+
+type heartbeatControlPublisher interface {
+	RefreshHeartbeat(context.Context, uint64) error
 }
 
 type PublishConfig struct {
@@ -33,6 +38,7 @@ type Publisher struct {
 	store   OwnershipCommitter
 	control ControlPublisher
 	config  PublishConfig
+	mu      sync.Mutex
 }
 
 func NewPublisher(store OwnershipCommitter, control ControlPublisher, config PublishConfig) (*Publisher, error) {
@@ -59,10 +65,34 @@ func (p *Publisher) CommitAndPublish(ctx context.Context, desired reconcile.Desi
 	if err := p.store.Commit(ctx, state); err != nil {
 		return fmt.Errorf("commit ownership: %w", err)
 	}
-	if err := p.control.Publish(ctx, desired.Generation, p.config.HeartbeatNS, p.config.HeartbeatTimeoutNS, p.config.Flags); err != nil {
+	if err := p.publishControl(ctx, desired.Generation); err != nil {
 		return fmt.Errorf("publish generation %d: %w", desired.Generation, err)
 	}
 	return nil
+}
+
+func (p *Publisher) RefreshHeartbeat(ctx context.Context, heartbeatNS uint64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	refresher, ok := p.control.(heartbeatControlPublisher)
+	if !ok {
+		return fmt.Errorf("control publisher does not support heartbeat refresh")
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err := refresher.RefreshHeartbeat(ctx, heartbeatNS); err != nil {
+		return err
+	}
+	p.config.HeartbeatNS = heartbeatNS
+	return nil
+}
+
+func (p *Publisher) publishControl(ctx context.Context, generation uint64) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.control.Publish(ctx, generation, p.config.HeartbeatNS, p.config.HeartbeatTimeoutNS, p.config.Flags)
 }
 
 func VerifyState(desired reconcile.DesiredState, actual reconcile.ActualState) error {
