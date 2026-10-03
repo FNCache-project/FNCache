@@ -53,6 +53,9 @@ func TestM3KubernetesE2E(t *testing.T) {
 	if _, err := run("kubectl", "-n", "kube-system", "rollout", "status", "daemonset/oncache-e2e-oncache", "--timeout=180s"); err != nil {
 		t.Fatal(err)
 	}
+	if got := mustOutput(t, "kubectl", "-n", "kube-system", "get", "daemonset/oncache-e2e-oncache", "-o", "jsonpath={.spec.template.spec.hostPID}"); got != "true" {
+		t.Fatalf("agent DaemonSet hostPID = %q, want true", got)
+	}
 	waitPod(t, "pod-a")
 	waitPod(t, "pod-b")
 	captureEvidence(t, evidence)

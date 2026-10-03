@@ -21,6 +21,7 @@ spec:
     spec:
       serviceAccountName: {{ include "oncache.serviceAccountName" . }}
       hostNetwork: true
+      hostPID: true
       dnsPolicy: ClusterFirstWithHostNet
       terminationGracePeriodSeconds: 30
       nodeSelector:
