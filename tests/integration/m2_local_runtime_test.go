@@ -231,6 +231,10 @@ func snapshotLocalRuntime(t *testing.T, pinRoot, statePath, markerComment, under
 	if !strings.Contains(marker, markerComment) {
 		t.Fatalf("marker comment %q is missing from rules: %s", markerComment, marker)
 	}
+	hook := `-A POSTROUTING -m comment --comment "` + markerComment + `-hook" -j ONCACHE`
+	if !strings.Contains(marker, hook) {
+		t.Fatalf("marker hook %q is missing from rules: %s", hook, marker)
+	}
 	return localRuntimeSnapshot{maps: maps, programs: programs, tc: tc, marker: marker}
 }
 
