@@ -32,8 +32,7 @@ type dynamicRuntimeCommitter struct{}
 func (dynamicRuntimeCommitter) Commit(context.Context, reconcile.OwnershipState) error { return nil }
 
 type dynamicRuntimePublisherControl struct {
-	refreshCalls  atomic.Int32
-	lastHeartbeat atomic.Uint64
+	refreshSignal chan<- uint64
 }
 
 func (*dynamicRuntimePublisherControl) Publish(context.Context, uint64, uint64, uint64, uint32) error {
@@ -41,8 +40,9 @@ func (*dynamicRuntimePublisherControl) Publish(context.Context, uint64, uint64, 
 }
 
 func (c *dynamicRuntimePublisherControl) RefreshHeartbeat(_ context.Context, heartbeat uint64) error {
-	c.refreshCalls.Add(1)
-	c.lastHeartbeat.Store(heartbeat)
+	if c.refreshSignal != nil {
+		c.refreshSignal <- heartbeat
+	}
 	return nil
 }
 
@@ -126,20 +126,37 @@ func dynamicRuntimePublisher(t *testing.T) *controlplane.Publisher {
 }
 
 func TestRunDynamicHeartbeatRefreshesPeriodically(t *testing.T) {
-	refresher := &dynamicRuntimePublisherControl{}
+	refreshes := make(chan uint64, 1)
+	refresher := &dynamicRuntimePublisherControl{refreshSignal: refreshes}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	ticks := make(chan time.Time, 1)
+	heartbeat := uint64(100)
+	now := func() (uint64, error) {
+		heartbeat++
+		return heartbeat, nil
+	}
 	done := make(chan struct{})
 	go func() {
-		runDynamicHeartbeat(ctx, time.Millisecond, refresher)
+		runDynamicHeartbeatLoop(ctx, ticks, now, refresher)
 		close(done)
 	}()
-	deadline := time.Now().Add(time.Second)
-	for refresher.refreshCalls.Load() < 2 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
+	select {
+	case got := <-refreshes:
+		if got != 101 {
+			t.Fatalf("initial heartbeat = %d, want 101", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("initial heartbeat was not refreshed")
 	}
-	if refresher.refreshCalls.Load() < 2 || refresher.lastHeartbeat.Load() == 0 {
-		t.Fatal("dynamic heartbeat was not refreshed periodically")
+	ticks <- time.Time{}
+	select {
+	case got := <-refreshes:
+		if got != 102 {
+			t.Fatalf("periodic heartbeat = %d, want 102", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("periodic heartbeat was not refreshed")
 	}
 	cancel()
 	select {

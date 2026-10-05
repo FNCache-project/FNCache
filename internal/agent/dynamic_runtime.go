@@ -47,11 +47,20 @@ func runDynamicHeartbeat(ctx context.Context, interval time.Duration, refresher 
 	if interval <= 0 || refresher == nil {
 		return
 	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	runDynamicHeartbeatLoop(ctx, ticker.C, monotonicNowNS, refresher)
+}
+
+func runDynamicHeartbeatLoop(ctx context.Context, ticks <-chan time.Time, now func() (uint64, error), refresher heartbeatRefresher) {
+	if now == nil || refresher == nil {
+		return
+	}
 	refresh := func() {
 		if ctx.Err() != nil {
 			return
 		}
-		heartbeat, err := monotonicNowNS()
+		heartbeat, err := now()
 		if err != nil {
 			return
 		}
@@ -61,11 +70,9 @@ func runDynamicHeartbeat(ctx context.Context, interval time.Duration, refresher 
 	}
 
 	refresh()
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
 	for {
 		select {
-		case <-ticker.C:
+		case <-ticks:
 			refresh()
 		case <-ctx.Done():
 			return
