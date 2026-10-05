@@ -71,6 +71,9 @@ func (h *LocalEndpointHandler) Handle(ctx context.Context, key reconcile.Reconci
 	if !ok || pod.NodeName != h.config.LocalNode || pod.HostNetwork || pod.Deleting {
 		return nil
 	}
+	if err := h.config.Control.Disable(ctx); err != nil {
+		return fmt.Errorf("disable fast path: %w", err)
+	}
 	endpoint, err := h.config.Resolver.Resolve(ctx, pod)
 	if err != nil {
 		return classifyEndpointError(err)
@@ -93,9 +96,6 @@ func (h *LocalEndpointHandler) Handle(ctx context.Context, key reconcile.Reconci
 	desired, err := kube.BuildDesiredState(snapshot, base, h.config.LocalNode, resolved)
 	if err != nil {
 		return fmt.Errorf("build local desired state: %w", err)
-	}
-	if err := h.config.Control.Disable(ctx); err != nil {
-		return fmt.Errorf("disable fast path: %w", err)
 	}
 	actual, err := h.config.Scanner.Scan(ctx)
 	if err != nil {

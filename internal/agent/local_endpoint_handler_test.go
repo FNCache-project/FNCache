@@ -123,7 +123,7 @@ func TestLocalEndpointHandlerCreatesAndPublishesEndpoint(t *testing.T) {
 	if err := handler.Handle(context.Background(), reconcile.ReconcileKey{Kind: reconcile.ReconcileLocalEndpoint, UID: "pod-1"}); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(events, []string{"resolve", "desired", "disable", "scan", "endpoint", "maps", "scan", "publish"}) {
+	if !reflect.DeepEqual(events, []string{"disable", "resolve", "desired", "scan", "endpoint", "maps", "scan", "publish"}) {
 		t.Fatalf("events = %v", events)
 	}
 	if len(publisher.desired.LocalEndpoints) != 2 {
@@ -140,7 +140,7 @@ func TestLocalEndpointHandlerClassifiesNotReadyAndSkipsInvalidPod(t *testing.T) 
 	handler, _ := NewLocalEndpointHandler(LocalEndpointHandlerConfig{Store: store, Resolver: &localHandlerResolver{err: resolver.ErrEndpointNotReady, events: &events}, LocalNode: "node-a", Desired: &localHandlerDesired{events: &events}, Scanner: &localHandlerScanner{events: &events}, Control: &localHandlerControl{events: &events}, Endpoint: &localHandlerEndpoint{events: &events}, Maps: &localHandlerMaps{events: &events}, Remover: localHandlerRemover{}, Publisher: &localHandlerPublisher{events: &events}})
 	err := handler.Handle(context.Background(), reconcile.ReconcileKey{Kind: reconcile.ReconcileLocalEndpoint, UID: "pod-1"})
 	var classified *reconcile.ClassifiedError
-	if !errors.As(err, &classified) || classified.Class() != reconcile.ErrorRetryable || len(events) != 1 {
+	if !errors.As(err, &classified) || classified.Class() != reconcile.ErrorRetryable || !reflect.DeepEqual(events, []string{"disable", "resolve"}) {
 		t.Fatalf("not-ready result: err=%v events=%v", err, events)
 	}
 	pod.HostNetwork = true
@@ -148,7 +148,7 @@ func TestLocalEndpointHandlerClassifiesNotReadyAndSkipsInvalidPod(t *testing.T) 
 	if err := handler.Handle(context.Background(), reconcile.ReconcileKey{Kind: reconcile.ReconcileLocalEndpoint, UID: "pod-1"}); err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 1 {
+	if len(events) != 2 {
 		t.Fatalf("invalid Pod triggered operations: %v", events)
 	}
 }

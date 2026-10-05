@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -84,7 +85,7 @@ func TestLocalEndpointHandlerPendingPodReturnsRetryable(t *testing.T) {
 	}
 	err = handler.Handle(context.Background(), reconcile.ReconcileKey{Kind: reconcile.ReconcileLocalEndpoint, UID: pod.Identity.UID})
 	var classified *reconcile.ClassifiedError
-	if !errors.As(err, &classified) || classified.Class() != reconcile.ErrorRetryable || len(events) != 0 {
+	if !errors.As(err, &classified) || classified.Class() != reconcile.ErrorRetryable || !reflect.DeepEqual(events, []string{"disable"}) {
 		t.Fatalf("pending result: err=%v events=%v", err, events)
 	}
 }

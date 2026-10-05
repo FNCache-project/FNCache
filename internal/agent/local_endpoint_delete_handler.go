@@ -62,17 +62,20 @@ func (h *LocalEndpointDeleteHandler) Handle(ctx context.Context, key reconcile.R
 		return nil
 	}
 	if err != nil {
+		if disableErr := h.config.Control.Disable(ctx); disableErr != nil {
+			return fmt.Errorf("load ownership: %w (disable fast path failed: %v)", err, disableErr)
+		}
 		return fmt.Errorf("load ownership: %w", err)
 	}
 	owned, ok := state.Endpoints[key.UID]
 	if !ok {
 		return nil
 	}
-	if err := h.config.ReuseGuard.Check(ctx, snapshot, key.UID, owned); err != nil && !isKnownEndpointReuse(err) {
-		return err
-	}
 	if err := h.config.Control.Disable(ctx); err != nil {
 		return fmt.Errorf("disable fast path: %w", err)
+	}
+	if err := h.config.ReuseGuard.Check(ctx, snapshot, key.UID, owned); err != nil && !isKnownEndpointReuse(err) {
+		return err
 	}
 	snapshot = h.config.Store.Snapshot()
 	if err := h.config.ReuseGuard.Check(ctx, snapshot, key.UID, owned); err != nil && !isKnownEndpointReuse(err) {

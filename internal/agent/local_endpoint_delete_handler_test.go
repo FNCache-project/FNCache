@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"os"
+	"reflect"
 	"testing"
 
 	"github.com/cat-cc-Lcos/FNCache/internal/discovery"
@@ -24,6 +26,12 @@ func (s *deleteOwnership) Load(context.Context) (reconcile.OwnershipState, error
 type deleteRemover struct {
 	events *[]string
 	err    error
+}
+
+type failingDeleteReuseGuard struct{ err error }
+
+func (g failingDeleteReuseGuard) Check(context.Context, kube.Snapshot, string, reconcile.OwnedEndpoint) error {
+	return g.err
 }
 
 func (r *deleteRemover) Remove(context.Context, reconcile.OwnedEndpoint, reconcile.ActualState, reconcile.DesiredState) error {
@@ -84,7 +92,7 @@ func TestLocalEndpointDeleteHandlerRemovesAndPublishes(t *testing.T) {
 func TestLocalEndpointDeleteHandlerSkipsWithoutOwnershipOrForStaleEvent(t *testing.T) {
 	events := []string{}
 	store := deleteHandlerStore(t, handlerPod())
-	handler := deleteHandler(t, store, &deleteOwnership{err: errors.New("not found")}, &events, &localHandlerPublisher{events: &events})
+	handler := deleteHandler(t, store, &deleteOwnership{err: os.ErrNotExist}, &events, &localHandlerPublisher{events: &events})
 	if err := handler.Handle(context.Background(), reconcile.ReconcileKey{Kind: reconcile.ReconcileLocalEndpoint, UID: "pod-1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -98,6 +106,38 @@ func TestLocalEndpointDeleteHandlerSkipsWithoutOwnershipOrForStaleEvent(t *testi
 	}
 	if len(events) != 0 {
 		t.Fatalf("stale delete caused deletion: %v", events)
+	}
+}
+
+func TestLocalEndpointDeleteHandlerDisablesBeforeOwnershipFailure(t *testing.T) {
+	events := []string{}
+	store := deleteHandlerStore(t)
+	handler := deleteHandler(t, store, &deleteOwnership{err: errors.New("ownership unavailable")}, &events, &localHandlerPublisher{events: &events})
+	if err := handler.Handle(context.Background(), reconcile.ReconcileKey{Kind: reconcile.ReconcileLocalEndpoint, UID: "pod-1"}); err == nil {
+		t.Fatal("ownership failure was not returned")
+	}
+	if !reflect.DeepEqual(events, []string{"disable"}) {
+		t.Fatalf("fast path was not disabled before ownership failure: %v", events)
+	}
+}
+
+func TestLocalEndpointDeleteHandlerDisablesBeforeReuseFailure(t *testing.T) {
+	events := []string{}
+	store := deleteHandlerStore(t)
+	base := reconcile.DesiredState{Enabled: true, Capability: discovery.CapabilityReport{Supported: true}, LocalEndpoints: map[string]resolver.Endpoint{"pod-1": handlerEndpoint("pod-1")}}
+	handler, err := NewLocalEndpointDeleteHandler(LocalEndpointDeleteHandlerConfig{
+		Store: store, Ownership: &deleteOwnership{state: deleteOwnershipState()}, LocalNode: "node-a",
+		Desired: &localHandlerDesired{desired: base, events: &events}, Scanner: &localHandlerScanner{events: &events}, Control: &localHandlerControl{events: &events},
+		Remover: &deleteRemover{events: &events}, ReuseGuard: failingDeleteReuseGuard{err: errors.New("reuse check unavailable")}, Publisher: &localHandlerPublisher{events: &events},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.Handle(context.Background(), reconcile.ReconcileKey{Kind: reconcile.ReconcileLocalEndpoint, UID: "pod-1"}); err == nil {
+		t.Fatal("reuse check failure was not returned")
+	}
+	if !reflect.DeepEqual(events, []string{"disable"}) {
+		t.Fatalf("fast path was not disabled before reuse failure: %v", events)
 	}
 }
 
