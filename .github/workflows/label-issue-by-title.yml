@@ -1,0 +1,132 @@
+name: Synchronize issue type labels
+
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  contents: none
+  issues: write
+
+concurrency:
+  group: issue-type-label-${{ github.repository }}-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  sync-type-label:
+    if: >-
+      github.event.action == 'opened' ||
+      github.event.changes.title.from != null
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Synchronize type label from issue title
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const managedLabels = {
+              bug: {
+                color: 'd73a4a',
+                description: "Something isn't working",
+              },
+              feat: {
+                color: 'ff8809',
+                description: 'new feature',
+              },
+            };
+            const managedLabelNames = new Set(Object.keys(managedLabels));
+            const issueNumber = context.issue.number;
+            const title = String(context.payload.issue?.title ?? '');
+            const match = title.match(/^\[(bug|feature)\]/i);
+            const prefix = match?.[1].toLowerCase() ?? null;
+            const desiredLabel =
+              prefix === 'bug' ? 'bug' : prefix === 'feature' ? 'feat' : null;
+
+            const ensureLabel = async (name) => {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                });
+                return;
+              } catch (error) {
+                if (error.status !== 404) {
+                  throw error;
+                }
+              }
+
+              try {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                  color: managedLabels[name].color,
+                  description: managedLabels[name].description,
+                });
+              } catch (error) {
+                if (error.status !== 422) {
+                  throw error;
+                }
+
+                // Another run or a maintainer may have created the label concurrently.
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                });
+              }
+            };
+
+            const labels = await github.paginate(
+              github.rest.issues.listLabelsOnIssue,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+              },
+            );
+            const currentManagedLabels = labels
+              .map((label) => String(label.name ?? ''))
+              .filter((name) => managedLabelNames.has(name.toLowerCase()));
+
+            for (const label of currentManagedLabels) {
+              if (label.toLowerCase() === desiredLabel) {
+                continue;
+              }
+
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  name: label,
+                });
+              } catch (error) {
+                if (error.status !== 404) {
+                  throw error;
+                }
+              }
+            }
+
+            if (
+              desiredLabel !== null &&
+              !currentManagedLabels.some(
+                (label) => label.toLowerCase() === desiredLabel,
+              )
+            ) {
+              await ensureLabel(desiredLabel);
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                labels: [desiredLabel],
+              });
+            }
+
+            core.notice(
+              desiredLabel === null
+                ? `Removed managed type labels from Issue #${issueNumber}.`
+                : `Synchronized Issue #${issueNumber} with label ${desiredLabel}.`,
+            );
