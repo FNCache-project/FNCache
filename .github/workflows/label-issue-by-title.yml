@@ -37,7 +37,12 @@ jobs:
             };
             const managedLabelNames = new Set(Object.keys(managedLabels));
             const issueNumber = context.issue.number;
-            const title = String(context.payload.issue?.title ?? '');
+            const { data: issue } = await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+            });
+            const title = String(issue.title ?? '');
             const match = title.match(/^\[(bug|feature)\]/i);
             const prefix = match?.[1].toLowerCase() ?? null;
             const desiredLabel =
