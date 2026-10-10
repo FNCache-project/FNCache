@@ -66,7 +66,7 @@ func (h *LocalEndpointDeleteHandler) Handle(ctx context.Context, key reconcile.R
 	if !ok {
 		return nil
 	}
-	if err := h.config.ReuseGuard.Check(ctx, snapshot, key.UID, owned); err != nil && !isKnownEndpointReuse(err) {
+	if err := h.config.ReuseGuard.Check(ctx, snapshot, key.UID, owned); err != nil {
 		return err
 	}
 	base, err := h.config.Desired.Desired(ctx)
@@ -85,7 +85,7 @@ func (h *LocalEndpointDeleteHandler) Handle(ctx context.Context, key reconcile.R
 	}
 	if err := h.config.Generation.Execute(ctx, desired, func(ctx context.Context, desired reconcile.DesiredState, actual reconcile.ActualState) error {
 		snapshot := h.config.Store.Snapshot()
-		if err := h.config.ReuseGuard.Check(ctx, snapshot, key.UID, owned); err != nil && !isKnownEndpointReuse(err) {
+		if err := h.config.ReuseGuard.Check(ctx, snapshot, key.UID, owned); err != nil {
 			return err
 		}
 		return h.config.Remover.Remove(ctx, owned, actual, desired)
@@ -93,12 +93,4 @@ func (h *LocalEndpointDeleteHandler) Handle(ctx context.Context, key reconcile.R
 		return fmt.Errorf("publish local endpoint removal: %w", err)
 	}
 	return nil
-}
-
-func isKnownEndpointReuse(err error) bool {
-	var classified *reconcile.ClassifiedError
-	if !errors.As(err, &classified) {
-		return false
-	}
-	return classified.ReasonCode() == reconcile.ReasonPodIPReusePending || classified.ReasonCode() == reconcile.ReasonEndpointIdentityReuse
 }
