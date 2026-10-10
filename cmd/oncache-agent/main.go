@@ -16,7 +16,7 @@ import (
 	"github.com/cat-cc-Lcos/FNCache/internal/cleanup"
 	"github.com/cat-cc-Lcos/FNCache/internal/config"
 	"github.com/cat-cc-Lcos/FNCache/internal/datapath"
-	"github.com/cat-cc-Lcos/FNCache/internal/logging"
+	"github.com/cat-cc-Lcos/FNCache/internal/observability"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
 	"github.com/cat-cc-Lcos/FNCache/internal/server"
 )
@@ -27,7 +27,7 @@ func main() {
 	cleanupMode := flag.Bool("cleanup", false, "remove ONCache objects using ownership evidence")
 	dryRun := flag.Bool("dry-run", false, "print a cleanup plan without changing the node")
 	flag.Parse()
-	logger, loggerErr := logging.NewFromEnvironment("oncache-agent")
+	logger, loggerErr := observability.NewFromEnvironment("oncache-agent")
 	if loggerErr != nil {
 		fmt.Fprintln(os.Stderr, loggerErr)
 		os.Exit(2)
@@ -83,7 +83,11 @@ func runDynamic(path string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	httpServer, err := server.New(server.Config{ListenAddress: runtime.HTTPAddress(), DebugState: runtime.DebugStateEnabled()}, runtime)
+	handler, err := observability.NewHandler(observability.HandlerConfig{DebugState: runtime.DebugStateEnabled()}, runtime)
+	if err != nil {
+		return fmt.Errorf("create observability handler: %w", err)
+	}
+	httpServer, err := server.New(server.Config{ListenAddress: runtime.HTTPAddress()}, handler)
 	if err != nil {
 		return fmt.Errorf("create HTTP server: %w", err)
 	}

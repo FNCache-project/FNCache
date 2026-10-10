@@ -1,8 +1,7 @@
-package logging
+package observability
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -10,13 +9,11 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
 )
 
 const defaultRateInterval = 10 * time.Second
 
-type Config struct {
+type LoggingConfig struct {
 	Level        string
 	Component    string
 	Node         string
@@ -25,13 +22,25 @@ type Config struct {
 	Now          func() time.Time
 }
 
+type Event struct {
+	Level        slog.Level
+	Message      string
+	RateLimitKey string
+	Attrs        []any
+}
+
+type EventLogger interface {
+	Error(context.Context, string, ...any)
+	LogEvent(context.Context, Event)
+}
+
 type Logger struct {
 	base      *slog.Logger
 	component string
 	limiter   *RateLimiter
 }
 
-func New(config Config) (*Logger, error) {
+func New(config LoggingConfig) (*Logger, error) {
 	level, err := ParseLevel(config.Level)
 	if err != nil {
 		return nil, err
@@ -55,7 +64,7 @@ func New(config Config) (*Logger, error) {
 }
 
 func NewFromEnvironment(component string) (*Logger, error) {
-	return New(Config{Level: os.Getenv("ONCACHE_LOG_LEVEL"), Component: component, Node: os.Getenv("ONCACHE_NODE_NAME")})
+	return New(LoggingConfig{Level: os.Getenv("ONCACHE_LOG_LEVEL"), Component: component, Node: os.Getenv("ONCACHE_NODE_NAME")})
 }
 
 func NewDefault(component string) *Logger {
@@ -63,7 +72,7 @@ func NewDefault(component string) *Logger {
 	if err == nil {
 		return logger
 	}
-	logger, _ = New(Config{Level: "info", Component: component, Node: os.Getenv("ONCACHE_NODE_NAME")})
+	logger, _ = New(LoggingConfig{Level: "info", Component: component, Node: os.Getenv("ONCACHE_NODE_NAME")})
 	return logger
 }
 
@@ -86,35 +95,23 @@ func (l *Logger) Error(ctx context.Context, message string, attrs ...any) {
 	l.base.ErrorContext(ctx, message, attrs...)
 }
 
-func (l *Logger) LogReconcileError(ctx context.Context, key reconcile.ReconcileKey, err error) {
-	if l == nil || err == nil {
+func (l *Logger) LogEvent(ctx context.Context, event Event) {
+	if l == nil {
 		return
 	}
-	class := string(reconcile.ErrorInternal)
-	reason := key.Reason
-	if reason == "" {
-		reason = "RECONCILE_ERROR"
+	key := event.RateLimitKey
+	if key != "" {
+		key = strings.Join([]string{l.component, key}, ":")
 	}
-	var classified *reconcile.ClassifiedError
-	if errors.As(err, &classified) {
-		class = string(classified.Class())
-		if classified.ReasonCode() != "" {
-			reason = classified.ReasonCode()
-		}
-	}
-	allowed, suppressed := l.limiter.Allow(strings.Join([]string{l.component, class, reason}, ":"))
+	allowed, suppressed := l.limiter.Allow(key)
 	if !allowed {
 		return
 	}
-	attrs := []any{"generation", uint64(0), "reconcileKey", key.QueueKey(), "reason", reason, "class", class, "error", err.Error()}
+	attrs := append([]any(nil), event.Attrs...)
 	if suppressed > 0 {
 		attrs = append(attrs, "suppressed", suppressed)
 	}
-	level := slog.LevelWarn
-	if class == string(reconcile.ErrorInternal) || class == string(reconcile.ErrorSafetyViolation) || class == string(reconcile.ErrorConflict) {
-		level = slog.LevelError
-	}
-	l.base.Log(ctx, level, "reconcile failed", attrs...)
+	l.base.Log(ctx, event.Level, event.Message, attrs...)
 }
 
 type RateLimiter struct {

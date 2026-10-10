@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/cat-cc-Lcos/FNCache/internal/logging"
+	"github.com/cat-cc-Lcos/FNCache/internal/observability"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
 )
 
@@ -20,7 +20,7 @@ type Worker struct {
 	queue   *Queue
 	handler Handler
 	barrier ExecutionBarrier
-	logger  *logging.Logger
+	logger  observability.EventLogger
 }
 
 func NewWorker(queue *Queue, handler Handler) (*Worker, error) {
@@ -28,15 +28,18 @@ func NewWorker(queue *Queue, handler Handler) (*Worker, error) {
 }
 
 func NewWorkerWithBarrier(queue *Queue, handler Handler, barrier ExecutionBarrier) (*Worker, error) {
-	return NewWorkerWithBarrierAndLogger(queue, handler, barrier, logging.NewDefault("queue"))
+	return NewWorkerWithBarrierAndLogger(queue, handler, barrier, observability.NewDefault("queue"))
 }
 
-func NewWorkerWithBarrierAndLogger(queue *Queue, handler Handler, barrier ExecutionBarrier, logger *logging.Logger) (*Worker, error) {
+func NewWorkerWithBarrierAndLogger(queue *Queue, handler Handler, barrier ExecutionBarrier, logger observability.EventLogger) (*Worker, error) {
 	if queue == nil || handler == nil {
 		return nil, fmt.Errorf("queue and handler are required")
 	}
 	if logger == nil {
-		logger = logging.NewDefault("queue")
+		logger = observability.NewDefault("queue")
+	}
+	if typedLogger, ok := logger.(*observability.Logger); ok && typedLogger == nil {
+		logger = observability.NewDefault("queue")
 	}
 	return &Worker{queue: queue, handler: handler, barrier: barrier, logger: logger}, nil
 }
@@ -64,7 +67,7 @@ func (w *Worker) Run(ctx context.Context) {
 			err = w.handler(ctx, key)
 		}
 		if err != nil && ctx.Err() == nil {
-			w.logger.LogReconcileError(ctx, key, err)
+			w.logger.LogEvent(ctx, reconcileFailureEvent(key, err))
 		}
 		switch {
 		case err == nil || ctx.Err() != nil:

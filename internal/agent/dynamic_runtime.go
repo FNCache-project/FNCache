@@ -16,6 +16,7 @@ import (
 	"github.com/cat-cc-Lcos/FNCache/internal/datapath"
 	"github.com/cat-cc-Lcos/FNCache/internal/discovery"
 	"github.com/cat-cc-Lcos/FNCache/internal/kube"
+	"github.com/cat-cc-Lcos/FNCache/internal/observability"
 	"github.com/cat-cc-Lcos/FNCache/internal/overlay/flannel"
 	"github.com/cat-cc-Lcos/FNCache/internal/queue"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
@@ -32,6 +33,7 @@ type DynamicRuntime struct {
 	lifecycle     *reconcile.AgentStateMachine
 	healthEpoch   *HealthEpoch
 	factory       datapathComponentFactory
+	logger        observability.EventLogger
 	components    *datapathComponents
 	observer      *DynamicObserver
 	worker        *queue.Worker
@@ -79,11 +81,18 @@ func newDynamicRuntime(cfg config.AgentConfiguration, client kubernetes.Interfac
 }
 
 func newDynamicRuntimeWithFactory(cfg config.AgentConfiguration, client kubernetes.Interface, factory datapathComponentFactory) (*DynamicRuntime, error) {
+	return newDynamicRuntimeWithFactoryAndLogger(cfg, client, factory, observability.NewDefault("queue"))
+}
+
+func newDynamicRuntimeWithFactoryAndLogger(cfg config.AgentConfiguration, client kubernetes.Interface, factory datapathComponentFactory, logger observability.EventLogger) (*DynamicRuntime, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 	if client == nil || factory == nil {
 		return nil, fmt.Errorf("Kubernetes client is required")
+	}
+	if logger == nil {
+		logger = observability.NewDefault("queue")
 	}
 	store := kube.NewSnapshotStore()
 	interval := time.Duration(cfg.Kube.ResyncInterval)
@@ -114,7 +123,7 @@ func newDynamicRuntimeWithFactory(cfg config.AgentConfiguration, client kubernet
 	if err != nil {
 		return nil, err
 	}
-	return &DynamicRuntime{config: cfg, store: store, source: source, bootstrap: bootstrap, resync: resync, queue: target, barrier: reconcile.NewCoordinationBarrier(), lifecycle: reconcile.NewAgentStateMachine(), healthEpoch: NewHealthEpoch(), factory: factory, apiHealth: apiHealth}, nil
+	return &DynamicRuntime{config: cfg, store: store, source: source, bootstrap: bootstrap, resync: resync, queue: target, barrier: reconcile.NewCoordinationBarrier(), lifecycle: reconcile.NewAgentStateMachine(), healthEpoch: NewHealthEpoch(), factory: factory, logger: logger, apiHealth: apiHealth}, nil
 }
 
 func (r *DynamicRuntime) Run(ctx context.Context) error {
@@ -514,7 +523,7 @@ func (r *DynamicRuntime) initializeDatapath(ctx context.Context) error {
 		_ = components.Close()
 		return err
 	}
-	worker, err := queue.NewWorkerWithBarrier(r.queue, router.Handle, r.barrier)
+	worker, err := queue.NewWorkerWithBarrierAndLogger(r.queue, router.Handle, r.barrier, r.logger)
 	if err != nil {
 		_ = components.Close()
 		return err

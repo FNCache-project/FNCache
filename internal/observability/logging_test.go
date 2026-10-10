@@ -1,13 +1,12 @@
-package logging
+package observability
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"testing"
 	"time"
-
-	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
 )
 
 func TestParseLevel(t *testing.T) {
@@ -21,19 +20,21 @@ func TestParseLevel(t *testing.T) {
 	}
 }
 
-func TestLoggerRateLimitsReconcileErrorsAndReportsSuppressed(t *testing.T) {
+func TestLoggerRateLimitsEventsAndReportsSuppressed(t *testing.T) {
 	var output bytes.Buffer
 	now := time.Unix(100, 0)
-	logger, err := New(Config{Level: "debug", Component: "queue", Node: "node-a", Writer: &output, RateInterval: time.Second, Now: func() time.Time { return now }})
+	logger, err := New(LoggingConfig{Level: "debug", Component: "queue", Node: "node-a", Writer: &output, RateInterval: time.Second, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := reconcile.ReconcileKey{Kind: reconcile.ReconcileLocalEndpoint, Namespace: "default", Name: "web", UID: "pod-1"}
-	err = reconcile.NewClassifiedError(reconcile.ErrorRetryable, "ENDPOINT_NOT_READY", time.Second, context.Canceled)
-	logger.LogReconcileError(context.Background(), key, err)
-	logger.LogReconcileError(context.Background(), key, err)
+	event := Event{
+		Level: slog.LevelWarn, Message: "reconcile failed", RateLimitKey: "Retryable:ENDPOINT_NOT_READY",
+		Attrs: []any{"generation", uint64(0), "reconcileKey", "LocalEndpoint\x00default\x00web\x00pod-1", "reason", "ENDPOINT_NOT_READY", "class", "Retryable", "error", "context canceled"},
+	}
+	logger.LogEvent(context.Background(), event)
+	logger.LogEvent(context.Background(), event)
 	now = now.Add(2 * time.Second)
-	logger.LogReconcileError(context.Background(), key, err)
+	logger.LogEvent(context.Background(), event)
 
 	lines := bytes.Split(bytes.TrimSpace(output.Bytes()), []byte{'\n'})
 	if len(lines) != 2 {

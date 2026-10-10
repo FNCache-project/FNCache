@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cat-cc-Lcos/FNCache/internal/logging"
+	"github.com/cat-cc-Lcos/FNCache/internal/observability"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
 )
 
@@ -104,7 +104,7 @@ func TestWorkerUsesExecutionBarrier(t *testing.T) {
 func TestWorkerLogsClassifiedFailures(t *testing.T) {
 	q, _ := New(Config{BaseDelay: time.Millisecond, MaxDelay: 10 * time.Millisecond})
 	var output bytes.Buffer
-	logger, err := logging.New(logging.Config{Level: "debug", Component: "queue", Writer: &output, RateInterval: time.Hour})
+	logger, err := observability.New(observability.LoggingConfig{Level: "debug", Component: "queue", Writer: &output, RateInterval: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,5 +132,21 @@ func TestWorkerLogsClassifiedFailures(t *testing.T) {
 	}
 	if record["reason"] != "CAPABILITY_UNSUPPORTED" || record["class"] != "Unsupported" {
 		t.Fatalf("unexpected worker log: %#v", record)
+	}
+}
+
+func TestNewWorkerWithBarrierAndLoggerReplacesTypedNilLogger(t *testing.T) {
+	q, err := New(Config{BaseDelay: time.Millisecond, MaxDelay: 10 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var typedNilLogger *observability.Logger
+	worker, err := NewWorkerWithBarrierAndLogger(q, func(context.Context, reconcile.ReconcileKey) error { return nil }, nil, typedNilLogger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger, ok := worker.logger.(*observability.Logger)
+	if !ok || logger == nil {
+		t.Fatalf("typed nil logger was not replaced: %#v", worker.logger)
 	}
 }

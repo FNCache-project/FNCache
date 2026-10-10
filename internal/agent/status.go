@@ -4,12 +4,12 @@ import (
 	"context"
 	"time"
 
+	"github.com/cat-cc-Lcos/FNCache/internal/observability"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
-	"github.com/cat-cc-Lcos/FNCache/internal/server"
 )
 
-func (r *DynamicRuntime) Status(ctx context.Context) server.Snapshot {
-	snapshot := server.Snapshot{State: reconcile.AgentDisabled, APIHealthy: false, Reason: "AGENT_UNAVAILABLE"}
+func (r *DynamicRuntime) Status(ctx context.Context) observability.Snapshot {
+	snapshot := observability.Snapshot{State: reconcile.AgentDisabled, APIHealthy: false, Reason: "AGENT_UNAVAILABLE"}
 	if r == nil {
 		return snapshot
 	}
@@ -52,7 +52,7 @@ func (r *DynamicRuntime) HTTPAddress() string { return r.config.Server.ListenAdd
 
 func (r *DynamicRuntime) DebugStateEnabled() bool { return r.config.Features.DebugState }
 
-func readinessReason(snapshot server.Snapshot) string {
+func readinessReason(snapshot observability.Snapshot) string {
 	if snapshot.State != reconcile.AgentReady {
 		switch snapshot.State {
 		case reconcile.AgentBootstrapping:
