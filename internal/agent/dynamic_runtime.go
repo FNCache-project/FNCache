@@ -197,6 +197,7 @@ func (r *DynamicRuntime) Run(ctx context.Context) error {
 			if !ok {
 				if ctx.Err() != nil {
 					r.healthEpoch.Invalidate()
+					stoppingRequested = true
 					stopErr = r.lifecycle.Transition(reconcile.AgentStopping)
 				} else {
 					r.healthEpoch.Invalidate()

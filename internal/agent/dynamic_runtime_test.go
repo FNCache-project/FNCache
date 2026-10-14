@@ -126,6 +126,12 @@ type dynamicRuntimeHeartbeatControl struct {
 	mu         sync.Mutex
 	heartbeats []uint64
 	refreshErr error
+	disables   atomic.Int64
+}
+
+func (c *dynamicRuntimeHeartbeatControl) Disable(ctx context.Context) error {
+	c.disables.Add(1)
+	return c.localHandlerControl.Disable(ctx)
 }
 
 func (c *dynamicRuntimeHeartbeatControl) RefreshHeartbeat(_ context.Context, heartbeat uint64) error {
@@ -142,6 +148,10 @@ func (c *dynamicRuntimeHeartbeatControl) HeartbeatCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return len(c.heartbeats)
+}
+
+func (c *dynamicRuntimeHeartbeatControl) DisableCount() int64 {
+	return c.disables.Load()
 }
 
 func TestInitialReconcileRetryOnlyCoversEndpointNotReady(t *testing.T) {
@@ -244,6 +254,7 @@ func TestDynamicRuntimeStartsKubernetesControlChain(t *testing.T) {
 	if control.HeartbeatCount() == 0 {
 		t.Fatal("dynamic runtime did not start heartbeat refresh")
 	}
+	disablesBeforeShutdown := control.DisableCount()
 	cancel()
 	select {
 	case err := <-done:
@@ -256,8 +267,8 @@ func TestDynamicRuntimeStartsKubernetesControlChain(t *testing.T) {
 	if runtime.AgentState() != reconcile.AgentStopping {
 		t.Fatalf("agent state after stop = %s, want %s", runtime.AgentState(), reconcile.AgentStopping)
 	}
-	if len(events) == 0 || events[len(events)-1] != "disable" {
-		t.Fatalf("shutdown did not disable fast path: events=%v", events)
+	if control.DisableCount() <= disablesBeforeShutdown || len(events) == 0 || events[len(events)-1] != "disable" {
+		t.Fatalf("shutdown did not disable fast path: disables before=%d after=%d events=%v", disablesBeforeShutdown, control.DisableCount(), events)
 	}
 	heartbeats := control.HeartbeatCount()
 	time.Sleep(20 * time.Millisecond)
