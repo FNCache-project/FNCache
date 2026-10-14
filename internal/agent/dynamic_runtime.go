@@ -126,6 +126,7 @@ func newDynamicRuntimeWithFactoryAndLogger(cfg config.AgentConfiguration, client
 	return &DynamicRuntime{config: cfg, store: store, source: source, bootstrap: bootstrap, resync: resync, queue: target, barrier: reconcile.NewCoordinationBarrier(), lifecycle: reconcile.NewAgentStateMachine(), healthEpoch: NewHealthEpoch(), factory: factory, logger: logger, apiHealth: apiHealth}, nil
 }
 
+// Run starts the dynamic runtime and blocks until it stops or fails.
 func (r *DynamicRuntime) Run(ctx context.Context) error {
 	if err := r.bootstrap.Start(ctx); err != nil {
 		if transitionErr := r.lifecycle.Transition(reconcile.AgentDisabled); transitionErr != nil {
@@ -168,58 +169,16 @@ func (r *DynamicRuntime) Run(ctx context.Context) error {
 	r.healthEpoch.Advance()
 	heartbeatDone := make(chan error, 1)
 	go func() { heartbeatDone <- r.heartbeat.Run(runCtx) }()
-	heartbeatObserved := false
 	scanResults := r.scanScheduler.Run(runCtx)
 	_ = r.scanScheduler.Trigger(ScanFull)
-	var failureErr error
-	var runErr, stopErr error
-	stoppingRequested := false
-	stopped := false
-	for !stopped {
-		select {
-		case heartbeatErr := <-heartbeatDone:
-			heartbeatObserved = true
-			if ctx.Err() != nil {
-				r.healthEpoch.Invalidate()
-				stoppingRequested = true
-				stopErr = r.lifecycle.Transition(reconcile.AgentStopping)
-			} else {
-				r.healthEpoch.Invalidate()
-				if heartbeatErr == nil {
-					heartbeatErr = fmt.Errorf("heartbeat refresher stopped unexpectedly")
-				}
-				failureErr = heartbeatErr
-			}
-			cancel()
-			r.queue.ShutDown()
-			stopped = true
-		case result, ok := <-scanResults:
-			if !ok {
-				stopErr, failureErr = r.handleClosedScanResults(ctx, &stoppingRequested)
-				cancel()
-				r.queue.ShutDown()
-				stopped = true
-				continue
-			}
-			if result.Critical || result.InvalidateEpoch {
-				r.healthEpoch.Invalidate()
-				failureErr = result.Err
-				if failureErr == nil {
-					failureErr = fmt.Errorf("%s", result.Reason)
-				}
-				cancel()
-				r.queue.ShutDown()
-				stopped = true
-			}
-		case <-ctx.Done():
-			r.healthEpoch.Invalidate()
-			stoppingRequested = true
-			stopErr = r.lifecycle.Transition(reconcile.AgentStopping)
-			cancel()
-			r.queue.ShutDown()
-			stopped = true
-		}
-	}
+	stopResult := r.waitForRuntimeStop(ctx, ctx.Done(), heartbeatDone, scanResults)
+	cancel()
+	r.queue.ShutDown()
+	heartbeatObserved := stopResult.heartbeatObserved
+	failureErr := stopResult.failureErr
+	var runErr error
+	stopErr := stopResult.stopErr
+	stoppingRequested := stopResult.stoppingRequested
 	shutdownTimeout := time.Duration(r.config.Heartbeat.Timeout) + time.Second
 	shutdownWaiter, waiterErr := NewShutdownWaiter(shutdownTimeout)
 	if waiterErr != nil {
@@ -254,6 +213,54 @@ func (r *DynamicRuntime) Run(ctx context.Context) error {
 	return errors.Join(runErr, stopErr, shutdownErr)
 }
 
+type runtimeStopResult struct {
+	heartbeatObserved bool
+	failureErr        error
+	stopErr           error
+	stoppingRequested bool
+}
+
+// waitForRuntimeStop waits for the first runtime stop or failure event.
+func (r *DynamicRuntime) waitForRuntimeStop(ctx context.Context, stopCh <-chan struct{}, heartbeatDone <-chan error, scanResults <-chan ScanResult) runtimeStopResult {
+	var result runtimeStopResult
+	for {
+		select {
+		case heartbeatErr := <-heartbeatDone:
+			result.heartbeatObserved = true
+			r.healthEpoch.Invalidate()
+			if ctx.Err() != nil {
+				result.stoppingRequested = true
+				result.stopErr = r.lifecycle.Transition(reconcile.AgentStopping)
+			} else {
+				if heartbeatErr == nil {
+					heartbeatErr = fmt.Errorf("heartbeat refresher stopped unexpectedly")
+				}
+				result.failureErr = heartbeatErr
+			}
+			return result
+		case scanResult, ok := <-scanResults:
+			if !ok {
+				result.stopErr, result.failureErr = r.handleClosedScanResults(ctx, &result.stoppingRequested)
+				return result
+			}
+			if scanResult.Critical || scanResult.InvalidateEpoch {
+				r.healthEpoch.Invalidate()
+				result.failureErr = scanResult.Err
+				if result.failureErr == nil {
+					result.failureErr = fmt.Errorf("%s", scanResult.Reason)
+				}
+				return result
+			}
+		case <-stopCh:
+			r.healthEpoch.Invalidate()
+			result.stoppingRequested = true
+			result.stopErr = r.lifecycle.Transition(reconcile.AgentStopping)
+			return result
+		}
+	}
+}
+
+// handleClosedScanResults classifies a closed scan channel as graceful or failed.
 func (r *DynamicRuntime) handleClosedScanResults(ctx context.Context, stoppingRequested *bool) (stopErr, failureErr error) {
 	r.healthEpoch.Invalidate()
 	if ctx.Err() != nil {

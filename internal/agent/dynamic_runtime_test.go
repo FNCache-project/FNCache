@@ -129,6 +129,7 @@ type dynamicRuntimeHeartbeatControl struct {
 	disables   atomic.Int64
 }
 
+// Disable records a control-map disable operation for runtime assertions.
 func (c *dynamicRuntimeHeartbeatControl) Disable(ctx context.Context) error {
 	c.disables.Add(1)
 	return c.localHandlerControl.Disable(ctx)
@@ -150,6 +151,7 @@ func (c *dynamicRuntimeHeartbeatControl) HeartbeatCount() int {
 	return len(c.heartbeats)
 }
 
+// DisableCount reports the number of recorded disable operations.
 func (c *dynamicRuntimeHeartbeatControl) DisableCount() int64 {
 	return c.disables.Load()
 }
@@ -181,7 +183,8 @@ func TestInitialDatapathRetryCoversTransientDependencies(t *testing.T) {
 	}
 }
 
-func TestHandleClosedScanResultsRequestsGracefulStop(t *testing.T) {
+// TestWaitForRuntimeStopHandlesClosedScanResults verifies the closed-channel stop path.
+func TestWaitForRuntimeStopHandlesClosedScanResults(t *testing.T) {
 	runtime := &DynamicRuntime{healthEpoch: NewHealthEpoch(), lifecycle: reconcile.NewAgentStateMachine()}
 	if err := runtime.lifecycle.Transition(reconcile.AgentReconciling); err != nil {
 		t.Fatal(err)
@@ -191,17 +194,18 @@ func TestHandleClosedScanResultsRequestsGracefulStop(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	stoppingRequested := false
-
-	stopErr, failureErr := runtime.handleClosedScanResults(ctx, &stoppingRequested)
-	if !stoppingRequested {
+	heartbeatDone := make(chan error)
+	scanResults := make(chan ScanResult)
+	close(scanResults)
+	result := runtime.waitForRuntimeStop(ctx, nil, heartbeatDone, scanResults)
+	if !result.stoppingRequested {
 		t.Fatal("closed scan results did not request graceful stopping")
 	}
-	if stopErr != nil {
-		t.Fatalf("graceful stop transition error = %v", stopErr)
+	if result.stopErr != nil {
+		t.Fatalf("graceful stop transition error = %v", result.stopErr)
 	}
-	if failureErr != nil {
-		t.Fatalf("graceful scan closure reported failure: %v", failureErr)
+	if result.failureErr != nil {
+		t.Fatalf("graceful scan closure reported failure: %v", result.failureErr)
 	}
 	if runtime.AgentState() != reconcile.AgentStopping {
 		t.Fatalf("agent state = %s, want %s", runtime.AgentState(), reconcile.AgentStopping)
@@ -242,6 +246,7 @@ func dynamicTestConfig() config.AgentConfiguration {
 	}
 }
 
+// TestDynamicRuntimeStartsKubernetesControlChain verifies startup and graceful shutdown.
 func TestDynamicRuntimeStartsKubernetesControlChain(t *testing.T) {
 	sources := controlplane.Sources{Preflight: dynamicObserverPreflight{}, Flannel: dynamicObserverFlannel{}, Endpoints: dynamicObserverEndpoints{}, Pins: dynamicRuntimePins{}, TC: dynamicRuntimeTC{}, Rules: dynamicObserverRules{}}
 	events := []string{}
