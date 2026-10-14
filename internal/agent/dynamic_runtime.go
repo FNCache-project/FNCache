@@ -195,14 +195,7 @@ func (r *DynamicRuntime) Run(ctx context.Context) error {
 			stopped = true
 		case result, ok := <-scanResults:
 			if !ok {
-				if ctx.Err() != nil {
-					r.healthEpoch.Invalidate()
-					stoppingRequested = true
-					stopErr = r.lifecycle.Transition(reconcile.AgentStopping)
-				} else {
-					r.healthEpoch.Invalidate()
-					failureErr = fmt.Errorf("scan scheduler stopped unexpectedly")
-				}
+				stopErr, failureErr = r.handleClosedScanResults(ctx, &stoppingRequested)
 				cancel()
 				r.queue.ShutDown()
 				stopped = true
@@ -259,6 +252,15 @@ func (r *DynamicRuntime) Run(ctx context.Context) error {
 		return errors.Join(runErr, stopErr, shutdownErr, closeErr)
 	}
 	return errors.Join(runErr, stopErr, shutdownErr)
+}
+
+func (r *DynamicRuntime) handleClosedScanResults(ctx context.Context, stoppingRequested *bool) (stopErr, failureErr error) {
+	r.healthEpoch.Invalidate()
+	if ctx.Err() != nil {
+		*stoppingRequested = true
+		return r.lifecycle.Transition(reconcile.AgentStopping), nil
+	}
+	return nil, fmt.Errorf("scan scheduler stopped unexpectedly")
 }
 
 func (r *DynamicRuntime) initializeDatapathWithRetry(ctx context.Context) error {

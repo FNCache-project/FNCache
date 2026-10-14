@@ -181,6 +181,36 @@ func TestInitialDatapathRetryCoversTransientDependencies(t *testing.T) {
 	}
 }
 
+func TestHandleClosedScanResultsRequestsGracefulStop(t *testing.T) {
+	runtime := &DynamicRuntime{healthEpoch: NewHealthEpoch(), lifecycle: reconcile.NewAgentStateMachine()}
+	if err := runtime.lifecycle.Transition(reconcile.AgentReconciling); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.lifecycle.Transition(reconcile.AgentReady); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	stoppingRequested := false
+
+	stopErr, failureErr := runtime.handleClosedScanResults(ctx, &stoppingRequested)
+	if !stoppingRequested {
+		t.Fatal("closed scan results did not request graceful stopping")
+	}
+	if stopErr != nil {
+		t.Fatalf("graceful stop transition error = %v", stopErr)
+	}
+	if failureErr != nil {
+		t.Fatalf("graceful scan closure reported failure: %v", failureErr)
+	}
+	if runtime.AgentState() != reconcile.AgentStopping {
+		t.Fatalf("agent state = %s, want %s", runtime.AgentState(), reconcile.AgentStopping)
+	}
+	if runtime.healthEpoch.IsCurrent(1) {
+		t.Fatal("health epoch remained current after scan scheduler closure")
+	}
+}
+
 func dynamicRuntimePublisher(t *testing.T, published *atomic.Bool) *controlplane.Publisher {
 	t.Helper()
 	publisher, err := controlplane.NewPublisher(dynamicRuntimeCommitter{}, dynamicRuntimePublisherControl{published: published}, controlplane.PublishConfig{InstallationID: "install", NodeUID: "node-a", ELFBuildID: "sha256:test", HeartbeatNS: 1, HeartbeatTimeoutNS: 5})
