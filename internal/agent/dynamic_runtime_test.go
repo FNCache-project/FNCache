@@ -126,6 +126,13 @@ type dynamicRuntimeHeartbeatControl struct {
 	mu         sync.Mutex
 	heartbeats []uint64
 	refreshErr error
+	disables   atomic.Int64
+}
+
+// Disable records a control-map disable operation for runtime assertions.
+func (c *dynamicRuntimeHeartbeatControl) Disable(ctx context.Context) error {
+	c.disables.Add(1)
+	return c.localHandlerControl.Disable(ctx)
 }
 
 func (c *dynamicRuntimeHeartbeatControl) RefreshHeartbeat(_ context.Context, heartbeat uint64) error {
@@ -142,6 +149,11 @@ func (c *dynamicRuntimeHeartbeatControl) HeartbeatCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return len(c.heartbeats)
+}
+
+// DisableCount reports the number of recorded disable operations.
+func (c *dynamicRuntimeHeartbeatControl) DisableCount() int64 {
+	return c.disables.Load()
 }
 
 func TestInitialReconcileRetryOnlyCoversEndpointNotReady(t *testing.T) {
@@ -168,6 +180,38 @@ func TestInitialDatapathRetryCoversTransientDependencies(t *testing.T) {
 	}
 	if delay, retry := initialDatapathRetry(errors.New("invalid configuration")); retry || delay != 0 {
 		t.Fatalf("fatal error retry = %t after %s, want false/0", retry, delay)
+	}
+}
+
+// TestWaitForRuntimeStopHandlesClosedScanResults verifies the closed-channel stop path.
+func TestWaitForRuntimeStopHandlesClosedScanResults(t *testing.T) {
+	runtime := &DynamicRuntime{healthEpoch: NewHealthEpoch(), lifecycle: reconcile.NewAgentStateMachine()}
+	if err := runtime.lifecycle.Transition(reconcile.AgentReconciling); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.lifecycle.Transition(reconcile.AgentReady); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	heartbeatDone := make(chan error)
+	scanResults := make(chan ScanResult)
+	close(scanResults)
+	result := runtime.waitForRuntimeStop(ctx, nil, heartbeatDone, scanResults)
+	if !result.stoppingRequested {
+		t.Fatal("closed scan results did not request graceful stopping")
+	}
+	if result.stopErr != nil {
+		t.Fatalf("graceful stop transition error = %v", result.stopErr)
+	}
+	if result.failureErr != nil {
+		t.Fatalf("graceful scan closure reported failure: %v", result.failureErr)
+	}
+	if runtime.AgentState() != reconcile.AgentStopping {
+		t.Fatalf("agent state = %s, want %s", runtime.AgentState(), reconcile.AgentStopping)
+	}
+	if runtime.healthEpoch.IsCurrent(1) {
+		t.Fatal("health epoch remained current after scan scheduler closure")
 	}
 }
 
@@ -202,6 +246,7 @@ func dynamicTestConfig() config.AgentConfiguration {
 	}
 }
 
+// TestDynamicRuntimeStartsKubernetesControlChain verifies startup and graceful shutdown.
 func TestDynamicRuntimeStartsKubernetesControlChain(t *testing.T) {
 	sources := controlplane.Sources{Preflight: dynamicObserverPreflight{}, Flannel: dynamicObserverFlannel{}, Endpoints: dynamicObserverEndpoints{}, Pins: dynamicRuntimePins{}, TC: dynamicRuntimeTC{}, Rules: dynamicObserverRules{}}
 	events := []string{}
@@ -244,6 +289,7 @@ func TestDynamicRuntimeStartsKubernetesControlChain(t *testing.T) {
 	if control.HeartbeatCount() == 0 {
 		t.Fatal("dynamic runtime did not start heartbeat refresh")
 	}
+	disablesBeforeShutdown := control.DisableCount()
 	cancel()
 	select {
 	case err := <-done:
@@ -256,8 +302,8 @@ func TestDynamicRuntimeStartsKubernetesControlChain(t *testing.T) {
 	if runtime.AgentState() != reconcile.AgentStopping {
 		t.Fatalf("agent state after stop = %s, want %s", runtime.AgentState(), reconcile.AgentStopping)
 	}
-	if len(events) == 0 || events[len(events)-1] != "disable" {
-		t.Fatalf("shutdown did not disable fast path: events=%v", events)
+	if control.DisableCount() <= disablesBeforeShutdown || len(events) == 0 || events[len(events)-1] != "disable" {
+		t.Fatalf("shutdown did not disable fast path: disables before=%d after=%d events=%v", disablesBeforeShutdown, control.DisableCount(), events)
 	}
 	heartbeats := control.HeartbeatCount()
 	time.Sleep(20 * time.Millisecond)
