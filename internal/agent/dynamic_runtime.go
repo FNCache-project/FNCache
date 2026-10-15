@@ -128,6 +128,13 @@ func newDynamicRuntimeWithFactoryAndLogger(cfg config.AgentConfiguration, client
 
 // Run starts the dynamic runtime and blocks until it stops or fails.
 func (r *DynamicRuntime) Run(ctx context.Context) error {
+	if !r.config.Features.Enabled {
+		if err := r.lifecycle.Transition(reconcile.AgentDisabled); err != nil {
+			return err
+		}
+		<-ctx.Done()
+		return nil
+	}
 	if err := r.bootstrap.Start(ctx); err != nil {
 		if transitionErr := r.lifecycle.Transition(reconcile.AgentDisabled); transitionErr != nil {
 			return errors.Join(err, transitionErr)

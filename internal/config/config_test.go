@@ -22,6 +22,20 @@ func TestLoadDefaultsAndEnvironment(t *testing.T) {
 	}
 }
 
+func TestLoadPreservesDisabledFeature(t *testing.T) {
+	t.Setenv("ONCACHE_NODE_NAME", "node-a")
+	t.Setenv("ONCACHE_LOG_LEVEL", "info")
+	path := writeConfig(t, "nodeName: node-a\nfeatures:\n  enabled: false\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Features.Enabled {
+		t.Fatal("features.enabled=false was not preserved")
+	}
+}
+
 func TestLoadRejectsUnknownField(t *testing.T) {
 	path := writeConfig(t, "nodeName: node-a\nunknown: true\n")
 	if _, err := Load(path); err == nil {

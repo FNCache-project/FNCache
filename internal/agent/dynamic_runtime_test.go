@@ -315,6 +315,54 @@ func TestDynamicRuntimeStartsKubernetesControlChain(t *testing.T) {
 	}
 }
 
+func TestDynamicRuntimeSkipsDatapathWhenFeatureDisabled(t *testing.T) {
+	cfg := dynamicTestConfig()
+	cfg.Features.Enabled = false
+	var factoryCalls atomic.Int32
+	factory := func(context.Context, datapathComponentConfig) (*datapathComponents, error) {
+		factoryCalls.Add(1)
+		return nil, errors.New("datapath factory must not be called")
+	}
+	runtime, err := newDynamicRuntimeWithFactory(cfg, fake.NewSimpleClientset(), factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- runtime.Run(ctx) }()
+
+	deadline := time.Now().Add(time.Second)
+	for runtime.AgentState() != reconcile.AgentDisabled && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if runtime.AgentState() != reconcile.AgentDisabled {
+		t.Fatalf("agent state = %s, want %s", runtime.AgentState(), reconcile.AgentDisabled)
+	}
+	if factoryCalls.Load() != 0 {
+		t.Fatalf("datapath factory calls = %d, want 0", factoryCalls.Load())
+	}
+	if runtime.components != nil {
+		t.Fatal("disabled runtime unexpectedly created datapath components")
+	}
+
+	select {
+	case err := <-done:
+		t.Fatalf("disabled runtime returned before context cancellation: %v", err)
+	default:
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("disabled runtime returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("disabled runtime did not stop after context cancellation")
+	}
+}
+
 func TestDynamicRuntimeBlocksQueuedPublishAfterKubernetesFreshnessExpires(t *testing.T) {
 	sources := controlplane.Sources{Preflight: dynamicObserverPreflight{}, Flannel: dynamicObserverFlannel{}, Endpoints: dynamicObserverEndpoints{}, Pins: dynamicRuntimePins{}, TC: dynamicRuntimeTC{}, Rules: dynamicObserverRules{}}
 	events := []string{}
