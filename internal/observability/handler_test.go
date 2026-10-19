@@ -1,7 +1,6 @@
 package observability
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,19 +9,15 @@ import (
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
 )
 
-type fakeStatus struct{ snapshot Snapshot }
-
-func (f fakeStatus) Status(context.Context) Snapshot { return f.snapshot }
-
-func TestNewHandlerRequiresStatusProvider(t *testing.T) {
+func TestNewHandlerRequiresSnapshotStore(t *testing.T) {
 	if _, err := NewHandler(HandlerConfig{}, nil); err == nil {
-		t.Fatal("handler accepted a nil status provider")
+		t.Fatal("handler accepted a nil snapshot store")
 	}
 }
 
 func TestHTTPEndpoints(t *testing.T) {
-	provider := fakeStatus{snapshot: Snapshot{State: reconcile.AgentReady, Ready: true, Generation: 7, DatapathEnabled: true, APIHealthy: true, HeartbeatFresh: true, QueueDepth: 2}}
-	handler, err := NewHandler(HandlerConfig{}, provider)
+	store := NewSnapshotStore(Snapshot{State: reconcile.AgentReady, Ready: true, Generation: 7, DatapathEnabled: true, APIHealthy: true, HeartbeatFresh: true, QueueDepth: 2})
+	handler, err := NewHandler(HandlerConfig{}, store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +55,7 @@ func TestHTTPEndpoints(t *testing.T) {
 		t.Fatalf("debug state was not disabled: %d", response.Code)
 	}
 
-	debugHandler, err := NewHandler(HandlerConfig{DebugState: true}, provider)
+	debugHandler, err := NewHandler(HandlerConfig{DebugState: true}, store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,8 +67,8 @@ func TestHTTPEndpoints(t *testing.T) {
 }
 
 func TestReadyzReturnsUnavailableForDisabledState(t *testing.T) {
-	provider := fakeStatus{snapshot: Snapshot{State: reconcile.AgentDisabled, Reason: "CAPABILITY_UNSUPPORTED"}}
-	handler, err := NewHandler(HandlerConfig{}, provider)
+	store := NewSnapshotStore(Snapshot{State: reconcile.AgentDisabled, Reason: "CAPABILITY_UNSUPPORTED"})
+	handler, err := NewHandler(HandlerConfig{}, store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,5 +76,26 @@ func TestReadyzReturnsUnavailableForDisabledState(t *testing.T) {
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if recorder.Code != http.StatusServiceUnavailable || !strings.Contains(recorder.Body.String(), "CAPABILITY_UNSUPPORTED") {
 		t.Fatalf("unexpected disabled readiness response = %d %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestHTTPEndpointsReadPublishedSnapshot(t *testing.T) {
+	store := NewSnapshotStore(Snapshot{State: reconcile.AgentReady, DatapathEnabled: true, APIHealthy: true, HeartbeatFresh: true})
+	handler, err := NewHandler(HandlerConfig{DebugState: true}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/readyz", "/metrics", "/debug/state"} {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		if recorder.Code == http.StatusInternalServerError {
+			t.Fatalf("%s returned an internal error", path)
+		}
+	}
+	store.Update(Snapshot{State: reconcile.AgentDisabled, Reason: "AGENT_DISABLED"})
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if recorder.Code != http.StatusServiceUnavailable || !strings.Contains(recorder.Body.String(), "AGENT_DISABLED") {
+		t.Fatalf("handler did not read the latest snapshot: %d %s", recorder.Code, recorder.Body.String())
 	}
 }

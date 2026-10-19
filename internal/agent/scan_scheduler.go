@@ -17,13 +17,16 @@ const (
 )
 
 type ScanResult struct {
-	Level           ScanLevel
-	StartedAt       time.Time
-	FinishedAt      time.Time
-	Critical        bool
-	InvalidateEpoch bool
-	Reason          string
-	Err             error
+	Level              ScanLevel
+	StartedAt          time.Time
+	FinishedAt         time.Time
+	DatapathObserved   bool
+	DatapathReady      bool
+	DatapathGeneration uint64
+	Critical           bool
+	InvalidateEpoch    bool
+	Reason             string
+	Err                error
 }
 
 type ScanFunc func(context.Context) ScanResult

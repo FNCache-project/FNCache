@@ -59,7 +59,12 @@ func (s *RuntimeScanAdapter) classifyRuntimeScan(ctx context.Context, level Scan
 	verification := actual
 	verification.Control.Enabled = false
 	if err := s.verify(desired, verification); err != nil {
-		return ScanResult{Level: level, Critical: true, InvalidateEpoch: true, Reason: "DATAPATH_STATE_INCOMPLETE", Err: err}
+		return ScanResult{
+			Level: level, DatapathObserved: true,
+			DatapathReady:      actual.Control.Verified && actual.Control.Enabled,
+			DatapathGeneration: actual.Control.Generation,
+			Critical:           true, InvalidateEpoch: true, Reason: "DATAPATH_STATE_INCOMPLETE", Err: err,
+		}
 	}
 	return result
 }
@@ -72,7 +77,11 @@ func classifyScan(level ScanLevel, actual reconcile.ActualState, err error) Scan
 	if err != nil {
 		return failedScan(level, err)
 	}
-	result := ScanResult{Level: level, Reason: "SCAN_OK"}
+	result := ScanResult{
+		Level: level, Reason: "SCAN_OK", DatapathObserved: true,
+		DatapathReady:      actual.Control.Verified && actual.Control.Enabled,
+		DatapathGeneration: actual.Control.Generation,
+	}
 	if len(actual.Conflicts) != 0 {
 		result.Critical = true
 		result.InvalidateEpoch = true
