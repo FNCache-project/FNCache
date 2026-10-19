@@ -131,6 +131,17 @@ func (s *InformerSource) recordError(err error) {
 	s.errMu.Unlock()
 }
 
+func (s *InformerSource) clearError() {
+	s.errMu.Lock()
+	defer s.errMu.Unlock()
+	s.healthMu.RLock()
+	synced := s.synced
+	s.healthMu.RUnlock()
+	if synced {
+		s.lastErr = nil
+	}
+}
+
 func (s *InformerSource) addPod(obj interface{}) {
 	s.upsertPod(obj)
 	s.notifyPodEvent(nil, obj)
@@ -161,6 +172,7 @@ func (s *InformerSource) deletePod(obj interface{}) {
 		return
 	}
 	s.store.DeletePod(string(pod.UID))
+	s.clearError()
 	s.notifyPodEvent(obj, nil)
 }
 
@@ -175,7 +187,9 @@ func (s *InformerSource) upsertPod(obj interface{}) {
 	}
 	if err != nil {
 		s.recordError(err)
+		return
 	}
+	s.clearError()
 }
 
 func (s *InformerSource) addNode(obj interface{}) {
@@ -208,6 +222,7 @@ func (s *InformerSource) deleteNode(obj interface{}) {
 		return
 	}
 	s.store.DeleteNode(node.Name, string(node.UID))
+	s.clearError()
 	s.notifyNodeEvent(obj, nil)
 }
 
@@ -222,7 +237,9 @@ func (s *InformerSource) upsertNode(obj interface{}) {
 	}
 	if err != nil {
 		s.recordError(err)
+		return
 	}
+	s.clearError()
 }
 
 func podObject(obj interface{}) (*corev1.Pod, error) {
