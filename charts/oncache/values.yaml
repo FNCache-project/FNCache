@@ -1,6 +1,6 @@
 image:
-  repository: oncache-agent
-  tag: dev
+  repository: ghcr.io/fncache-project/fncache-agent
+  tag: v0.5.0-pre
   pullPolicy: IfNotPresent
 
 agent:
