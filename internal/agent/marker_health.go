@@ -8,6 +8,7 @@ import (
 
 	"github.com/cat-cc-Lcos/FNCache/internal/controlplane"
 	"github.com/cat-cc-Lcos/FNCache/internal/overlay/flannel"
+	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
 )
 
 var (
@@ -53,6 +54,21 @@ func (m *MarkerHealthMonitor) Check(ctx context.Context) error {
 		}
 		return fmt.Errorf("%w: marker rule or jump is missing", ErrMarkerDrift)
 	}
+	return m.verifyState(state)
+}
+
+func (m *MarkerHealthMonitor) CheckForPublish(ctx context.Context) error {
+	state, err := m.source.Scan(ctx, m.spec)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrMarkerUnhealthy, err)
+	}
+	if !state.Present || !state.JumpsPresent {
+		return fmt.Errorf("%w: marker rule or jump is missing", ErrMarkerDrift)
+	}
+	return m.verifyState(state)
+}
+
+func (m *MarkerHealthMonitor) verifyState(state reconcile.RuleState) error {
 	identity := m.spec.Chain + "/" + m.spec.Comment
 	if state.Identity != identity || state.Fingerprint != m.expectedFingerprint {
 		return fmt.Errorf("%w: marker identity or fingerprint changed", ErrMarkerDrift)

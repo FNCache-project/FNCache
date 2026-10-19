@@ -46,6 +46,9 @@ func TestMarkerHealthMonitorAcceptsCanonicalRule(t *testing.T) {
 	if err := monitor.Check(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	if err := monitor.CheckForPublish(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestMarkerHealthMonitorHandlesMissingAndDriftedRule(t *testing.T) {
@@ -53,6 +56,9 @@ func TestMarkerHealthMonitorHandlesMissingAndDriftedRule(t *testing.T) {
 	monitor := newMarkerHealthMonitor(t, rules, &fakeMarkerHealthPins{})
 	if err := monitor.Check(context.Background()); err != nil {
 		t.Fatalf("disabled datapath treated missing marker as failure: %v", err)
+	}
+	if err := monitor.CheckForPublish(context.Background()); !errors.Is(err, ErrMarkerDrift) {
+		t.Fatalf("publish check error = %v, want ErrMarkerDrift", err)
 	}
 	rules.state.Present = true
 	rules.state.JumpsPresent = true
