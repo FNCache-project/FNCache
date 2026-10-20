@@ -45,7 +45,18 @@ func TestResolveContainerdEndpointReportsMissingAutoCandidates(t *testing.T) {
 	_, err := resolveContainerdEndpoint(context.Background(), RuntimeEndpointAuto, []string{"unix:///missing/containerd.sock"}, func(context.Context, string) (net.Conn, error) {
 		return nil, errors.New("missing")
 	})
-	if err == nil || !strings.Contains(err.Error(), "auto containerd endpoint unavailable") {
+	if err == nil || !errors.Is(err, ErrContainerdEndpointNotReady) {
 		t.Fatalf("expected auto discovery error, got %v", err)
+	}
+}
+
+func TestResolveContainerdEndpointHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := resolveContainerdEndpoint(ctx, RuntimeEndpointAuto, []string{"unix:///missing/containerd.sock"}, func(context.Context, string) (net.Conn, error) {
+		return nil, errors.New("missing")
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("endpoint discovery error = %v, want context canceled", err)
 	}
 }

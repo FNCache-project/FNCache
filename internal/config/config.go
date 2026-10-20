@@ -178,6 +178,7 @@ func (c AgentConfiguration) Validate() error {
 	return nil
 }
 
+// defaults returns the baseline dynamic agent configuration.
 func defaults() AgentConfiguration {
 	return AgentConfiguration{
 		APIVersion: "oncache.io/v1alpha1", Kind: "AgentConfiguration", RuntimeEndpoint: "auto",

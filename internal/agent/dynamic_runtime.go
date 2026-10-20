@@ -278,6 +278,7 @@ func (r *DynamicRuntime) handleClosedScanResults(ctx context.Context, stoppingRe
 	return nil, fmt.Errorf("scan scheduler stopped unexpectedly")
 }
 
+// initializeDatapathWithRetry waits for transient startup dependencies without ignoring cancellation.
 func (r *DynamicRuntime) initializeDatapathWithRetry(ctx context.Context) error {
 	for {
 		if err := r.initializeDatapath(ctx); err == nil {
@@ -296,8 +297,9 @@ func (r *DynamicRuntime) initializeDatapathWithRetry(ctx context.Context) error 
 	}
 }
 
+// initialDatapathRetry classifies dependencies that may become ready after startup.
 func initialDatapathRetry(err error) (time.Duration, bool) {
-	if errors.Is(err, ErrKubernetesSnapshotNotReady) || errors.Is(err, flannel.ErrDiscoveryNotReady) {
+	if errors.Is(err, ErrKubernetesSnapshotNotReady) || errors.Is(err, flannel.ErrDiscoveryNotReady) || errors.Is(err, resolver.ErrContainerdEndpointNotReady) {
 		return time.Second, true
 	}
 	return 0, false
@@ -421,6 +423,7 @@ func (r *DynamicRuntime) markerRuleSpec() flannel.MarkerRuleSpec {
 	return flannel.MarkerRuleSpec{Chain: r.config.Markers.Chain, Comment: r.config.Markers.Comment}
 }
 
+// initializeDatapath resolves runtime dependencies and creates the datapath components.
 func (r *DynamicRuntime) initializeDatapath(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
