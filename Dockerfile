@@ -46,6 +46,7 @@ RUN apt-get update \
         ca-certificates \
         iproute2 \
         iptables \
+        linux-tools-generic \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=agent-build /out/oncache-agent /oncache-agent
