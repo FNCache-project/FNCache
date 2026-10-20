@@ -452,7 +452,6 @@ func (r *DynamicRuntime) initializeDatapath(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create dynamic datapath components: %w", err)
 	}
-	components.publisher.SetPublishGuard(r.apiHealth.Fresh)
 	heartbeatControl, ok := components.control.(HeartbeatControl)
 	if !ok {
 		_ = components.Close()
@@ -487,6 +486,15 @@ func (r *DynamicRuntime) initializeDatapath(ctx context.Context) error {
 		_ = components.Close()
 		return err
 	}
+	components.publisher.SetPublishGuard(func(ctx context.Context) error {
+		if err := r.apiHealth.Fresh(ctx); err != nil {
+			return err
+		}
+		if err := flannelHealth.Check(ctx); err != nil {
+			return err
+		}
+		return markerHealth.CheckForPublish(ctx)
+	})
 	observer, err := NewDynamicObserver(r.config, r.store, components.sources)
 	if err != nil {
 		_ = components.Close()

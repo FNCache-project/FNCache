@@ -439,6 +439,77 @@ func TestDynamicRuntimeBlocksQueuedPublishAfterKubernetesFreshnessExpires(t *tes
 	}
 }
 
+func TestDynamicRuntimeBlocksQueuedPublishAfterFlannelOrMarkerDrift(t *testing.T) {
+	tests := []struct {
+		name    string
+		sources func(*atomic.Bool) controlplane.Sources
+	}{
+		{
+			name: "Flannel",
+			sources: func(drift *atomic.Bool) controlplane.Sources {
+				return controlplane.Sources{Preflight: dynamicObserverPreflight{}, Flannel: dynamicRuntimeFlannelHealth{drift: drift}, Endpoints: dynamicObserverEndpoints{}, Pins: dynamicRuntimePins{}, TC: dynamicRuntimeTC{}, Rules: dynamicObserverRules{}}
+			},
+		},
+		{
+			name: "Marker",
+			sources: func(drift *atomic.Bool) controlplane.Sources {
+				return controlplane.Sources{Preflight: dynamicObserverPreflight{}, Flannel: dynamicObserverFlannel{}, Endpoints: dynamicObserverEndpoints{}, Pins: dynamicRuntimePins{}, TC: dynamicRuntimeTC{}, Rules: dynamicRuntimeMarkerHealth{drift: drift}}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			events := []string{}
+			published := &atomic.Bool{}
+			control := &dynamicRuntimeHeartbeatControl{localHandlerControl: &localHandlerControl{events: &events}}
+			cfg := dynamicTestConfig()
+			var drift atomic.Bool
+			sources := test.sources(&drift)
+			factory := func(context.Context, datapathComponentConfig) (*datapathComponents, error) {
+				return dynamicRuntimeComponents(t, sources, control, &events, published), nil
+			}
+			node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a", UID: types.UID("node-a")}}
+			runtime, err := newDynamicRuntimeWithFactory(cfg, fake.NewSimpleClientset(node), factory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if err := runtime.bootstrap.Start(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if err := runtime.initializeDatapath(ctx); err != nil {
+				t.Fatal(err)
+			}
+			workerDone := make(chan struct{})
+			go func() {
+				runtime.worker.Run(ctx)
+				close(workerDone)
+			}()
+			defer func() {
+				cancel()
+				runtime.queue.ShutDown()
+				<-workerDone
+				_ = runtime.components.Close()
+			}()
+
+			drift.Store(true)
+			key := reconcile.ReconcileKey{Kind: reconcile.ReconcileGlobal, Name: "node-a"}
+			runtime.queue.Add(key)
+			deadline := time.Now().Add(time.Second)
+			for runtime.queue.NumRequeues(key) == 0 && time.Now().Before(deadline) {
+				time.Sleep(time.Millisecond)
+			}
+			if runtime.queue.NumRequeues(key) == 0 {
+				t.Fatal("drifted queued reconciliation did not return an error")
+			}
+			if published.Load() {
+				t.Fatal("drifted queued reconciliation published control state")
+			}
+		})
+	}
+}
+
 func TestDynamicRuntimeDegradesWhenHeartbeatFails(t *testing.T) {
 	sources := controlplane.Sources{Preflight: dynamicObserverPreflight{}, Flannel: dynamicObserverFlannel{}, Endpoints: dynamicObserverEndpoints{}, Pins: dynamicRuntimePins{}, TC: dynamicRuntimeTC{}, Rules: dynamicObserverRules{}}
 	events := []string{}
