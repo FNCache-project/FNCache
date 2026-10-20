@@ -43,8 +43,12 @@ func TestWorkerRetriesAndForgets(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("worker did not retry")
 	}
-	if q.NumRequeues(workerKey()) != 0 {
-		t.Fatalf("requeues after success = %d", q.NumRequeues(workerKey()))
+	deadline := time.Now().Add(time.Second)
+	for q.NumRequeues(workerKey()) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("requeues after success = %d", q.NumRequeues(workerKey()))
+		}
+		time.Sleep(time.Millisecond)
 	}
 	q.ShutDown()
 }
