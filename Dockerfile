@@ -46,10 +46,16 @@ RUN apt-get update \
         ca-certificates \
         iproute2 \
         iptables \
+        linux-tools-generic \
+    && bpftool_path="$(find /usr/lib -type f -path '/usr/lib/linux-tools*/bpftool' -perm -111 -print -quit)" \
+    && test -n "${bpftool_path}" \
+    && install -m 0755 "${bpftool_path}" /usr/local/bin/bpftool \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=agent-build /out/oncache-agent /oncache-agent
 COPY --from=bpf-build /out/bpf/tc_prog_kern.o /opt/oncache/bpf/tc_prog_kern.o
+
+ENV PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 LABEL org.opencontainers.image.title="FNCache agent" \
       org.opencontainers.image.version="${VERSION}" \

@@ -94,6 +94,9 @@ maps:
 
 func TestDefaultsAndValidationIncludeResyncInterval(t *testing.T) {
 	cfg := defaults()
+	if cfg.RuntimeEndpoint != "auto" {
+		t.Fatalf("runtime endpoint default = %q, want auto", cfg.RuntimeEndpoint)
+	}
 	if time.Duration(cfg.Kube.ResyncInterval) != 30*time.Minute {
 		t.Fatalf("resync default = %v", cfg.Kube.ResyncInterval)
 	}

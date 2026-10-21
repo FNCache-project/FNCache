@@ -20,6 +20,7 @@ import (
 	"github.com/cat-cc-Lcos/FNCache/internal/overlay/flannel"
 	"github.com/cat-cc-Lcos/FNCache/internal/queue"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
+	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 )
 
 type DynamicRuntime struct {
@@ -277,6 +278,7 @@ func (r *DynamicRuntime) handleClosedScanResults(ctx context.Context, stoppingRe
 	return nil, fmt.Errorf("scan scheduler stopped unexpectedly")
 }
 
+// initializeDatapathWithRetry waits for transient startup dependencies without ignoring cancellation.
 func (r *DynamicRuntime) initializeDatapathWithRetry(ctx context.Context) error {
 	for {
 		if err := r.initializeDatapath(ctx); err == nil {
@@ -295,8 +297,9 @@ func (r *DynamicRuntime) initializeDatapathWithRetry(ctx context.Context) error 
 	}
 }
 
+// initialDatapathRetry classifies dependencies that may become ready after startup.
 func initialDatapathRetry(err error) (time.Duration, bool) {
-	if errors.Is(err, ErrKubernetesSnapshotNotReady) || errors.Is(err, flannel.ErrDiscoveryNotReady) {
+	if errors.Is(err, ErrKubernetesSnapshotNotReady) || errors.Is(err, flannel.ErrDiscoveryNotReady) || errors.Is(err, resolver.ErrContainerdEndpointNotReady) {
 		return time.Second, true
 	}
 	return 0, false
@@ -420,6 +423,7 @@ func (r *DynamicRuntime) markerRuleSpec() flannel.MarkerRuleSpec {
 	return flannel.MarkerRuleSpec{Chain: r.config.Markers.Chain, Comment: r.config.Markers.Comment}
 }
 
+// initializeDatapath resolves runtime dependencies and creates the datapath components.
 func (r *DynamicRuntime) initializeDatapath(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -432,6 +436,11 @@ func (r *DynamicRuntime) initializeDatapath(ctx context.Context) error {
 	if !ok || node.Identity.UID == "" {
 		return fmt.Errorf("%w: local Node %q is missing from Snapshot", ErrKubernetesSnapshotNotReady, r.config.NodeName)
 	}
+	runtimeEndpoint, err := resolver.ResolveContainerdEndpoint(ctx, r.config.RuntimeEndpoint)
+	if err != nil {
+		return fmt.Errorf("resolve containerd endpoint: %w", err)
+	}
+	r.config.RuntimeEndpoint = runtimeEndpoint
 	heartbeat, err := monotonicNowNS()
 	if err != nil {
 		return fmt.Errorf("read monotonic clock: %w", err)

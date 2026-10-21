@@ -169,8 +169,9 @@ func TestInitialReconcileRetryOnlyCoversEndpointNotReady(t *testing.T) {
 
 func TestInitialDatapathRetryCoversTransientDependencies(t *testing.T) {
 	for name, err := range map[string]error{
-		"snapshot": fmt.Errorf("bootstrap: %w", ErrKubernetesSnapshotNotReady),
-		"flannel":  fmt.Errorf("baseline: %w", flannel.ErrDiscoveryNotReady),
+		"snapshot":   fmt.Errorf("bootstrap: %w", ErrKubernetesSnapshotNotReady),
+		"flannel":    fmt.Errorf("baseline: %w", flannel.ErrDiscoveryNotReady),
+		"containerd": fmt.Errorf("runtime: %w", resolver.ErrContainerdEndpointNotReady),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if delay, retry := initialDatapathRetry(err); !retry || delay != time.Second {
