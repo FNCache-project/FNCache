@@ -50,6 +50,7 @@ config:
   features:
     enabled: true
     debugState: false
+    cleanupOnShutdown: true
 
 rbac:
   create: true
@@ -79,8 +80,19 @@ tolerations: []
 affinity: {}
 
 probes:
-  enabled: false
+  enabled: true
   port: 9090
+  startup:
+    periodSeconds: 2
+    failureThreshold: 30
+  liveness:
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+  readiness:
+    periodSeconds: 5
+    timeoutSeconds: 2
+    failureThreshold: 3
 
 metrics:
   enabled: false

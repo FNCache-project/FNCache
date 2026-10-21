@@ -11,6 +11,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
+	"github.com/cat-cc-Lcos/FNCache/internal/cleanup"
 	"github.com/cat-cc-Lcos/FNCache/internal/config"
 	"github.com/cat-cc-Lcos/FNCache/internal/controlplane"
 	"github.com/cat-cc-Lcos/FNCache/internal/datapath"
@@ -203,6 +204,11 @@ func (r *DynamicRuntime) Run(ctx context.Context) error {
 	shutdownErr = errors.Join(shutdownErr, shutdownWaiter.Wait(shutdownCtx, workerDone))
 	if stoppingRequested && shutdownErr == nil {
 		shutdownErr = errors.Join(shutdownErr, r.disableFastPathForShutdown())
+		if r.config.Features.CleanupOnShutdown {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			shutdownErr = errors.Join(shutdownErr, r.cleanupOwnedObjects(cleanupCtx))
+			cleanupCancel()
+		}
 	}
 	if failureErr != nil {
 		disableCtx, disableCancel := context.WithTimeout(context.Background(), time.Duration(r.config.Heartbeat.Timeout))
@@ -219,6 +225,23 @@ func (r *DynamicRuntime) Run(ctx context.Context) error {
 		return errors.Join(runErr, stopErr, shutdownErr, closeErr)
 	}
 	return errors.Join(runErr, stopErr, shutdownErr)
+}
+
+// cleanupOwnedObjects removes only objects proven to belong to this installation.
+func (r *DynamicRuntime) cleanupOwnedObjects(ctx context.Context) error {
+	_, err := cleanup.Run(ctx, cleanup.Options{
+		PinRoot: r.config.PinRoot, StatePath: filepath.Join(r.config.StateDir, "state.json"), InstallationID: r.config.InstallationID,
+		MarkerChain: r.config.Markers.Chain, MarkerComment: r.config.Markers.Comment,
+		MapCapacities: datapath.MapCapacities{
+			IngressCacheMaxEntries: r.config.Maps.IngressCacheMaxEntries, EgressIPCacheMaxEntries: r.config.Maps.EgressIPCacheMaxEntries,
+			EgressCacheMaxEntries: r.config.Maps.EgressCacheMaxEntries, PolicyCacheMaxEntries: r.config.Maps.PolicyCacheMaxEntries,
+			DevMapMaxEntries: r.config.Maps.DevMapMaxEntries,
+		},
+	}, false)
+	if err != nil {
+		return fmt.Errorf("cleanup owned objects: %w", err)
+	}
+	return nil
 }
 
 type runtimeStopResult struct {

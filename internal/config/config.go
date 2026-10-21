@@ -97,8 +97,9 @@ type ServerConfig struct {
 }
 
 type FeatureConfig struct {
-	Enabled    bool `yaml:"enabled"`
-	DebugState bool `yaml:"debugState"`
+	Enabled           bool `yaml:"enabled"`
+	DebugState        bool `yaml:"debugState"`
+	CleanupOnShutdown bool `yaml:"cleanupOnShutdown"`
 }
 
 func Load(path string) (AgentConfiguration, error) {

@@ -36,6 +36,19 @@ func TestLoadPreservesDisabledFeature(t *testing.T) {
 	}
 }
 
+func TestLoadPreservesCleanupOnShutdown(t *testing.T) {
+	t.Setenv("ONCACHE_NODE_NAME", "node-a")
+	path := writeConfig(t, "nodeName: node-a\nfeatures:\n  cleanupOnShutdown: true\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Features.CleanupOnShutdown {
+		t.Fatal("features.cleanupOnShutdown=true was not preserved")
+	}
+}
+
 func TestLoadRejectsUnknownField(t *testing.T) {
 	path := writeConfig(t, "nodeName: node-a\nunknown: true\n")
 	if _, err := Load(path); err == nil {
