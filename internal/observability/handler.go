@@ -1,7 +1,6 @@
 package observability
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,37 +9,21 @@ import (
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
 )
 
-type Snapshot struct {
-	State           reconcile.AgentState `json:"state"`
-	Ready           bool                 `json:"ready"`
-	Reason          string               `json:"reason,omitempty"`
-	Generation      uint64               `json:"generation"`
-	DatapathEnabled bool                 `json:"datapathEnabled"`
-	APIHealthy      bool                 `json:"apiHealthy"`
-	HeartbeatFresh  bool                 `json:"heartbeatFresh"`
-	QueueDepth      int                  `json:"queueDepth"`
-	KnownLinks      int                  `json:"knownLinks"`
-}
-
-type StatusProvider interface {
-	Status(context.Context) Snapshot
-}
-
 type HandlerConfig struct {
 	DebugState bool
 }
 
 type Handler struct {
-	provider   StatusProvider
+	snapshot   func() Snapshot
 	debugState bool
 	mux        *http.ServeMux
 }
 
-func NewHandler(config HandlerConfig, provider StatusProvider) (*Handler, error) {
-	if provider == nil {
-		return nil, fmt.Errorf("status provider is required")
+func NewHandler(config HandlerConfig, store *SnapshotStore) (*Handler, error) {
+	if store == nil {
+		return nil, fmt.Errorf("snapshot store is required")
 	}
-	h := &Handler{provider: provider, debugState: config.DebugState, mux: http.NewServeMux()}
+	h := &Handler{snapshot: store.Snapshot, debugState: config.DebugState, mux: http.NewServeMux()}
 	h.mux.HandleFunc("/livez", h.livez)
 	h.mux.HandleFunc("/readyz", h.readyz)
 	h.mux.HandleFunc("/metrics", h.metrics)
@@ -58,8 +41,8 @@ func (h *Handler) livez(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte("ok\n"))
 }
 
-func (h *Handler) readyz(w http.ResponseWriter, r *http.Request) {
-	snapshot := h.provider.Status(r.Context())
+func (h *Handler) readyz(w http.ResponseWriter, _ *http.Request) {
+	snapshot := h.snapshot()
 	status := http.StatusServiceUnavailable
 	if snapshot.Ready {
 		status = http.StatusOK
@@ -67,8 +50,8 @@ func (h *Handler) readyz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, snapshot)
 }
 
-func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
-	snapshot := h.provider.Status(r.Context())
+func (h *Handler) metrics(w http.ResponseWriter, _ *http.Request) {
+	snapshot := h.snapshot()
 	var b strings.Builder
 	b.WriteString("# TYPE oncache_agent_state gauge\n")
 	for _, state := range []reconcile.AgentState{reconcile.AgentBootstrapping, reconcile.AgentDisabled, reconcile.AgentReconciling, reconcile.AgentReady, reconcile.AgentDegraded, reconcile.AgentStopping} {
@@ -93,7 +76,7 @@ func (h *Handler) debug(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	writeJSON(w, http.StatusOK, h.provider.Status(r.Context()))
+	writeJSON(w, http.StatusOK, h.snapshot())
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
