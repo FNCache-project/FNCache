@@ -23,7 +23,7 @@ spec:
       hostNetwork: true
       hostPID: {{ .Values.hostPID }}
       dnsPolicy: ClusterFirstWithHostNet
-      terminationGracePeriodSeconds: 30
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       nodeSelector:
         {{- toYaml .Values.nodeSelector | nindent 8 }}
       tolerations:
@@ -87,14 +87,26 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           {{- if .Values.probes.enabled }}
+          startupProbe:
+            httpGet:
+              path: /livez
+              port: http
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
           livenessProbe:
             httpGet:
               path: /livez
               port: http
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
           readinessProbe:
             httpGet:
               path: /readyz
               port: http
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
           {{- end }}
       volumes:
         - name: bpf
