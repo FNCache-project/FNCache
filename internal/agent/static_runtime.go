@@ -51,6 +51,8 @@ type StaticRuntime struct {
 }
 
 func NewStaticRuntime(ctx context.Context, config StaticRuntimeConfig) (*StaticRuntime, error) {
+	config.Preflight.InstallationID = config.InstallationID
+	config.Preflight.ELFBuildID = config.ELFBuildID
 	if err := validateStaticRuntimeConfig(config); err != nil {
 		return nil, err
 	}

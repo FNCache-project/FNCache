@@ -9,10 +9,11 @@ import (
 	"testing"
 
 	"github.com/cat-cc-Lcos/FNCache/internal/discovery"
+	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 )
 
 func TestLinuxProbeReportsBasicCapabilities(t *testing.T) {
-	probe, request, cleanup := probeFixture(t, true, true, true)
+	probe, request, _, cleanup := probeFixture(t, true, true, true)
 	defer cleanup()
 	snapshot, err := probe.Probe(context.Background(), request)
 	if err != nil {
@@ -42,7 +43,7 @@ func TestLinuxProbeReportsMissingCapabilities(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			probe, request, cleanup := probeFixture(t, tc.mount, tc.btf, tc.cri)
+			probe, request, _, cleanup := probeFixture(t, tc.mount, tc.btf, tc.cri)
 			defer cleanup()
 			snapshot, err := probe.Probe(context.Background(), request)
 			if err != nil {
@@ -71,7 +72,7 @@ func TestLinuxProbeAcceptsConfiguredCustomMarker(t *testing.T) {
 		}
 		return fakeCommandRunner(ctx, name, args...)
 	}
-	probe, request, cleanup := probeFixtureWithRunner(t, true, true, true, runner)
+	probe, request, _, cleanup := probeFixtureWithRunner(t, true, true, true, runner)
 	defer cleanup()
 	request.MarkerChain = "FNCACHE"
 	request.MarkerComment = "fncache:marker"
@@ -95,6 +96,93 @@ func TestLinuxProbeAcceptsConfiguredCustomMarker(t *testing.T) {
 	}
 }
 
+func TestLinuxProbeAcceptsOwnedObjectsOnRestart(t *testing.T) {
+	runner := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name == "bpftool" {
+			if hasArg(args, "prog") && hasArg(args, "-f") {
+				return []byte(`[{"id":10,"pinned":["/sys/fs/bpf/oncache/v1/programs/tc_init_e"]}]`), nil
+			}
+			if hasArg(args, "map") && hasArg(args, "-f") {
+				return []byte(`[{"id":20,"pinned":["/sys/fs/bpf/oncache/v1/maps/control_map"]}]`), nil
+			}
+		}
+		if name == "tc" {
+			for _, arg := range args {
+				if arg == "filter" {
+					return []byte(`[{"pref":1000,"kind":"bpf"},{"pref":1000,"kind":"bpf","options":{"handle":"0x100","bpf_name":"tc_init_e","prog":{"id":10}}}]`), nil
+				}
+			}
+		}
+		return fakeCommandRunner(ctx, name, args...)
+	}
+	probe, request, root, cleanup := probeFixtureWithRunner(t, true, true, true, runner)
+	defer cleanup()
+	request.Node = resolver.NodeIdentity{Name: "node-a", UID: "node-1"}
+	request.StateDir = "/var/lib/oncache/v1"
+	request.InstallationID = "install-a"
+	request.ELFBuildID = "sha256:test"
+	if err := os.MkdirAll(filepath.Join(root, "var/lib/oncache/v1"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(root, "var/lib/oncache/v1/state.json"), `{"schemaVersion":1,"installationID":"install-a","nodeUID":"node-1","elfBuildID":"sha256:test","bpfABI":1,"programs":{"tc_init_e":{"ID":10}},"maps":{"control_map":{"ID":20}},"attachments":[{"Program":"tc_init_e","Priority":1000,"Handle":256,"ProgramID":10}]}`)
+
+	snapshot, err := probe.Probe(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range snapshot.Checks {
+		if check.Name == "external/conflicts" && !check.Supported {
+			t.Fatalf("owned objects were treated as external conflicts: %+v", check)
+		}
+	}
+}
+
+func TestLinuxProbeRejectsForeignObjectAlongsideOwnedState(t *testing.T) {
+	runner := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name == "bpftool" {
+			if hasArg(args, "prog") && hasArg(args, "-f") {
+				return []byte(`[{"id":10,"pinned":["/sys/fs/bpf/oncache/v1/programs/tc_init_e"]},{"id":99,"pinned":["/sys/fs/bpf/oncache/v1/programs/foreign"]}]`), nil
+			}
+			if hasArg(args, "map") && hasArg(args, "-f") {
+				return []byte(`[{"id":20,"pinned":["/sys/fs/bpf/oncache/v1/maps/control_map"]}]`), nil
+			}
+		}
+		if name == "tc" {
+			for _, arg := range args {
+				if arg == "filter" {
+					return []byte(`[{"pref":1000,"kind":"bpf"},{"pref":1000,"kind":"bpf","options":{"handle":"0x100","bpf_name":"tc_init_e","prog":{"id":10}}}]`), nil
+				}
+			}
+		}
+		return fakeCommandRunner(ctx, name, args...)
+	}
+	probe, request, root, cleanup := probeFixtureWithRunner(t, true, true, true, runner)
+	defer cleanup()
+	request.Node = resolver.NodeIdentity{Name: "node-a", UID: "node-1"}
+	request.StateDir = "/var/lib/oncache/v1"
+	request.InstallationID = "install-a"
+	request.ELFBuildID = "sha256:test"
+	if err := os.MkdirAll(filepath.Join(root, "var/lib/oncache/v1"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(root, "var/lib/oncache/v1/state.json"), `{"schemaVersion":1,"installationID":"install-a","nodeUID":"node-1","elfBuildID":"sha256:test","bpfABI":1,"programs":{"tc_init_e":{"ID":10}},"maps":{"control_map":{"ID":20}},"attachments":[{"Program":"tc_init_e","Priority":1000,"Handle":256,"ProgramID":10}]}`)
+
+	snapshot, err := probe.Probe(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range snapshot.Checks {
+		if check.Name != "external/conflicts" {
+			continue
+		}
+		if check.Supported || check.ReasonCode != "EXTERNAL_OBJECT_CONFLICT" {
+			t.Fatalf("foreign object was not rejected: %+v", check)
+		}
+		return
+	}
+	t.Fatal("external conflict check was not reported")
+}
+
 func TestLinuxProbeDetectsPinnedBPFConflict(t *testing.T) {
 	var progArgs, mapArgs []string
 	runner := func(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -113,7 +201,7 @@ func TestLinuxProbeDetectsPinnedBPFConflict(t *testing.T) {
 		}
 		return fakeCommandRunner(ctx, name, args...)
 	}
-	probe, request, cleanup := probeFixtureWithRunner(t, true, true, true, runner)
+	probe, request, _, cleanup := probeFixtureWithRunner(t, true, true, true, runner)
 	defer cleanup()
 
 	snapshot, err := probe.Probe(context.Background(), request)
@@ -162,7 +250,7 @@ func TestLinuxProbeDetectsPinnedBPFMapConflict(t *testing.T) {
 		}
 		return fakeCommandRunner(ctx, name, args...)
 	}
-	probe, request, cleanup := probeFixtureWithRunner(t, true, true, true, runner)
+	probe, request, _, cleanup := probeFixtureWithRunner(t, true, true, true, runner)
 	defer cleanup()
 
 	snapshot, err := probe.Probe(context.Background(), request)
@@ -185,11 +273,11 @@ func TestLinuxProbeDetectsPinnedBPFMapConflict(t *testing.T) {
 	t.Fatal("external conflict check was not reported")
 }
 
-func probeFixture(t *testing.T, mount, btf, cri bool) (*discovery.LinuxProbe, discovery.PreflightRequest, func()) {
+func probeFixture(t *testing.T, mount, btf, cri bool) (*discovery.LinuxProbe, discovery.PreflightRequest, string, func()) {
 	return probeFixtureWithRunner(t, mount, btf, cri, fakeCommandRunner)
 }
 
-func probeFixtureWithRunner(t *testing.T, mount, btf, cri bool, runner discovery.CommandRunner) (*discovery.LinuxProbe, discovery.PreflightRequest, func()) {
+func probeFixtureWithRunner(t *testing.T, mount, btf, cri bool, runner discovery.CommandRunner) (*discovery.LinuxProbe, discovery.PreflightRequest, string, func()) {
 	t.Helper()
 	root := t.TempDir()
 	for _, dir := range []string{"proc/sys/kernel", "proc/sys/net/ipv4", "sys/fs/bpf", "sys/kernel/btf", "run"} {
@@ -220,7 +308,7 @@ func probeFixtureWithRunner(t *testing.T, mount, btf, cri bool, runner discovery
 			_ = listener.Close()
 		}
 	}
-	return discovery.NewLinuxProbeWithRunner(root, runner), discovery.PreflightRequest{RuntimeURI: "unix:///run/containerd.sock", PinRoot: "/sys/fs/bpf/oncache/v1"}, cleanup
+	return discovery.NewLinuxProbeWithRunner(root, runner), discovery.PreflightRequest{RuntimeURI: "unix:///run/containerd.sock", PinRoot: "/sys/fs/bpf/oncache/v1"}, root, cleanup
 }
 
 func fakeCommandRunner(_ context.Context, name string, args ...string) ([]byte, error) {

@@ -183,7 +183,16 @@ func (p *LinuxProbe) checkExternalConflicts(ctx context.Context, req PreflightRe
 		result.Detail = string(netfilter)
 		return ProbeCheck{Name: "external/conflicts", ProbeResult: result}
 	}
-	if hasFixedTCConflict(tc) || hasPinnedObject(programs, req.PinRoot) || hasPinnedObject(maps, req.PinRoot) || hasReservedTOSConflict(netfilter, req.MarkerChain, req.MarkerComment) {
+	evidence := loadOwnershipEvidence(filepath.Join(p.path(req.StateDir), "state.json"), req.InstallationID, req.Node.UID, req.ELFBuildID)
+	programPins := make(map[string]uint32, len(evidence.ProgramPins))
+	for name, id := range evidence.ProgramPins {
+		programPins[filepath.Join(req.PinRoot, "programs", name)] = id
+	}
+	mapPins := make(map[string]uint32, len(evidence.MapPins))
+	for name, id := range evidence.MapPins {
+		mapPins[filepath.Join(req.PinRoot, "maps", name)] = id
+	}
+	if hasFixedTCConflictWithOwnership(tc, evidence.TCFilters) || hasForeignPinnedObject(programs, req.PinRoot, programPins) || hasForeignPinnedObject(maps, req.PinRoot, mapPins) || hasReservedTOSConflict(netfilter, req.MarkerChain, req.MarkerComment) {
 		result.ReasonCode, result.Retryable = "EXTERNAL_OBJECT_CONFLICT", false
 		result.Detail = "an external object uses an ONCache identity or reserved TOS mask"
 		return ProbeCheck{Name: "external/conflicts", ProbeResult: result}

@@ -10,13 +10,15 @@ import (
 )
 
 type PreflightRequest struct {
-	Node          resolver.NodeIdentity
-	PinRoot       string
-	StateDir      string
-	RuntimeURI    string
-	Overlay       string
-	MarkerChain   string
-	MarkerComment string
+	Node           resolver.NodeIdentity
+	PinRoot        string
+	StateDir       string
+	InstallationID string
+	ELFBuildID     string
+	RuntimeURI     string
+	Overlay        string
+	MarkerChain    string
+	MarkerComment  string
 }
 
 type ProbeCheck struct {

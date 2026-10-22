@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -92,7 +94,132 @@ func markerRuleFieldsMatch(fields []string) bool {
 	return true
 }
 
+type persistedObjectState struct {
+	ID uint32 `json:"ID"`
+}
+
+type persistedAttachmentState struct {
+	Program   string `json:"Program"`
+	Priority  uint16 `json:"Priority"`
+	Handle    uint32 `json:"Handle"`
+	ProgramID uint32 `json:"ProgramID"`
+}
+
+type persistedOwnershipState struct {
+	SchemaVersion  uint32                          `json:"schemaVersion"`
+	InstallationID string                          `json:"installationID"`
+	NodeUID        string                          `json:"nodeUID"`
+	ELFBuildID     string                          `json:"elfBuildID"`
+	ABI            uint32                          `json:"bpfABI"`
+	Programs       map[string]persistedObjectState `json:"programs"`
+	Maps           map[string]persistedObjectState `json:"maps"`
+	Attachments    []persistedAttachmentState      `json:"attachments"`
+}
+
+type ownershipEvidence struct {
+	ProgramPins map[string]uint32
+	MapPins     map[string]uint32
+	TCFilters   []ownedTCFilter
+}
+
+type ownedTCFilter struct {
+	Program   string
+	Priority  uint16
+	Handle    uint32
+	ProgramID uint32
+}
+
+func loadOwnershipEvidence(path, installationID, nodeUID, elfBuildID string) ownershipEvidence {
+	evidence := ownershipEvidence{}
+	if path == "" || installationID == "" || nodeUID == "" || elfBuildID == "" {
+		return evidence
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return evidence
+	}
+	var state persistedOwnershipState
+	if err := json.Unmarshal(data, &state); err != nil || state.SchemaVersion != 1 || state.InstallationID != installationID || state.NodeUID != nodeUID || state.ELFBuildID != elfBuildID || state.ABI != 1 {
+		return ownershipEvidence{}
+	}
+	evidence.ProgramPins = make(map[string]uint32, len(state.Programs))
+	for name, object := range state.Programs {
+		if name != "" && object.ID != 0 {
+			evidence.ProgramPins[name] = object.ID
+		}
+	}
+	evidence.MapPins = make(map[string]uint32, len(state.Maps))
+	for name, object := range state.Maps {
+		if name != "" && object.ID != 0 {
+			evidence.MapPins[name] = object.ID
+		}
+	}
+	for _, attachment := range state.Attachments {
+		if attachment.Program != "" && attachment.Priority != 0 && attachment.Handle != 0 && attachment.ProgramID != 0 {
+			evidence.TCFilters = append(evidence.TCFilters, ownedTCFilter{
+				Program: attachment.Program, Priority: attachment.Priority, Handle: attachment.Handle, ProgramID: attachment.ProgramID,
+			})
+		}
+	}
+	return evidence
+}
+
 func hasFixedTCConflict(output []byte) bool {
+	return hasFixedTCConflictWithOwnership(output, nil)
+}
+
+type tcFilterJSON struct {
+	Pref    json.RawMessage `json:"pref"`
+	Handle  json.RawMessage `json:"handle"`
+	Options struct {
+		Handle string `json:"handle"`
+		Name   string `json:"bpf_name"`
+		Prog   struct {
+			ID uint32 `json:"id"`
+		} `json:"prog"`
+	} `json:"options"`
+}
+
+func hasFixedTCConflictWithOwnership(output []byte, owned []ownedTCFilter) bool {
+	var filters []tcFilterJSON
+	if err := json.Unmarshal(bytes.TrimSpace(output), &filters); err == nil {
+		ownedPref := make(map[uint32]bool)
+		for _, filter := range filters {
+			pref, prefOK := jsonUint(filter.Pref)
+			handle, handleOK := jsonUint(filter.Handle)
+			if filter.Options.Handle != "" {
+				handle, handleOK = jsonUint([]byte(strconv.Quote(filter.Options.Handle)))
+			}
+			if isOwnedTCFilter(pref, prefOK, handle, handleOK, filter.Options.Name, filter.Options.Prog.ID, owned) {
+				ownedPref[pref] = true
+			}
+		}
+		for _, filter := range filters {
+			pref, prefOK := jsonUint(filter.Pref)
+			handle, handleOK := jsonUint(filter.Handle)
+			if filter.Options.Handle != "" {
+				handle, handleOK = jsonUint([]byte(strconv.Quote(filter.Options.Handle)))
+			}
+			if !prefOK && !handleOK {
+				continue
+			}
+			if !isReservedTCSlot(pref, prefOK, handle, handleOK) {
+				continue
+			}
+			if isOwnedTCFilter(pref, prefOK, handle, handleOK, filter.Options.Name, filter.Options.Prog.ID, owned) {
+				continue
+			}
+			// iproute2 emits a second, detail-less record for a BPF filter in
+			// some kernels. A matching detailed record is the ownership proof;
+			// an otherwise-unidentified slot remains a conflict.
+			if prefOK && !handleOK && filter.Options.Name == "" && filter.Options.Prog.ID == 0 && ownedPref[pref] {
+				continue
+			}
+			return true
+		}
+		return false
+	}
+
 	text := strings.ToLower(string(output))
 	for _, marker := range []string{
 		"\"pref\":1000", "\"pref\": 1000", "pref 1000",
@@ -108,6 +235,44 @@ func hasFixedTCConflict(output []byte) bool {
 	return false
 }
 
+func jsonUint(raw json.RawMessage) (uint32, bool) {
+	if len(raw) == 0 {
+		return 0, false
+	}
+	var number uint32
+	if err := json.Unmarshal(raw, &number); err == nil {
+		return number, true
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err != nil {
+		return 0, false
+	}
+	text = strings.TrimSpace(text)
+	base := 10
+	if strings.HasPrefix(strings.ToLower(text), "0x") {
+		text = text[2:]
+		base = 16
+	}
+	value, err := strconv.ParseUint(text, base, 32)
+	return uint32(value), err == nil
+}
+
+func isReservedTCSlot(pref uint32, prefOK bool, handle uint32, handleOK bool) bool {
+	return (prefOK && pref == 1000) || (handleOK && (handle == 0x100 || handle == 0x101 || handle == 0x200 || handle == 0x201))
+}
+
+func isOwnedTCFilter(pref uint32, prefOK bool, handle uint32, handleOK bool, name string, programID uint32, owned []ownedTCFilter) bool {
+	if !prefOK || !handleOK || name == "" || programID == 0 {
+		return false
+	}
+	for _, filter := range owned {
+		if filter.Priority == uint16(pref) && filter.Handle == handle && filter.Program == name && filter.ProgramID == programID {
+			return true
+		}
+	}
+	return false
+}
+
 func hasPinnedObject(output []byte, pinRoot string) bool {
 	if pinRoot == "" {
 		return false
@@ -116,4 +281,45 @@ func hasPinnedObject(output []byte, pinRoot string) bool {
 	text := string(output)
 	return strings.Contains(text, `"`+root+`"`) ||
 		strings.Contains(text, `"`+root+string(filepath.Separator))
+}
+
+type bpftoolObjectJSON struct {
+	ID     uint32          `json:"id"`
+	Pinned json.RawMessage `json:"pinned"`
+}
+
+func hasForeignPinnedObject(output []byte, pinRoot string, owned map[string]uint32) bool {
+	var objects []bpftoolObjectJSON
+	if err := json.Unmarshal(bytes.TrimSpace(output), &objects); err != nil {
+		return hasPinnedObject(output, pinRoot)
+	}
+	root := filepath.Clean(pinRoot)
+	for _, object := range objects {
+		for _, path := range pinnedPaths(object.Pinned) {
+			clean := filepath.Clean(path)
+			if clean != root && !strings.HasPrefix(clean, root+string(filepath.Separator)) {
+				continue
+			}
+			expectedID, ok := owned[clean]
+			if !ok || expectedID != object.ID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func pinnedPaths(raw json.RawMessage) []string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var paths []string
+	if json.Unmarshal(raw, &paths) == nil {
+		return paths
+	}
+	var path string
+	if json.Unmarshal(raw, &path) == nil && path != "" {
+		return []string{path}
+	}
+	return nil
 }

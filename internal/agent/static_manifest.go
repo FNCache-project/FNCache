@@ -126,7 +126,7 @@ func (m staticRuntimeManifest) runtimeConfig() (StaticRuntimeConfig, error) {
 	return StaticRuntimeConfig{
 		ELFPath: m.ELFPath, PinRoot: m.PinRoot, StatePath: m.StatePath, InstallationID: m.InstallationID, ELFBuildID: m.ELFBuildID,
 		Generation: m.Generation, HeartbeatNS: m.HeartbeatNS, HeartbeatTimeoutNS: m.HeartbeatTimeout, Flags: m.Flags,
-		Preflight: discovery.PreflightRequest{Node: resolver.NodeIdentity{Name: m.Preflight.NodeName, UID: m.Preflight.NodeUID}, PinRoot: m.PinRoot, StateDir: m.Preflight.StateDir, RuntimeURI: m.Preflight.RuntimeEndpoint, Overlay: m.Preflight.Overlay},
+		Preflight: discovery.PreflightRequest{Node: resolver.NodeIdentity{Name: m.Preflight.NodeName, UID: m.Preflight.NodeUID}, PinRoot: m.PinRoot, StateDir: m.Preflight.StateDir, InstallationID: m.InstallationID, ELFBuildID: m.ELFBuildID, RuntimeURI: m.Preflight.RuntimeEndpoint, Overlay: m.Preflight.Overlay},
 		Flannel:   flannel.DiscoveryRequest{VXLANLinkName: m.Flannel.VXLANLinkName, UnderlayDevice: m.Flannel.UnderlayDevice, MissMask: m.Flannel.MissMask, EstablishedMask: m.Flannel.EstablishedMask, IPTablesBackend: m.Flannel.IPTablesBackend}, Marker: m.Marker, Pods: pods, TCLinks: links,
 	}, nil
 }

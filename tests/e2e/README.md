@@ -43,3 +43,24 @@ exercise Pod churn, bounded PodIP reuse, and a paused-agent event-loss/resync
 scenario. `ONCACHE_M5_CHURN_ROUNDS` defaults to 30 and is bounded to 200.
 `ONCACHE_M5_RESYNC_INTERVAL` defaults to `15s` for the local VM baseline and
 can be increased for a quieter control-plane run.
+
+## One-command install lifecycle
+
+Set `ONCACHE_INSTALL_E2E=1` and run `make -C tests test-one-command-install`
+to validate the user-facing install flow on a healthy two-node K3s/Flannel
+VXLAN cluster. Set `INSTALL_E2E_WORKLOAD_IMAGE` to an image available in both
+node containerd instances; the image must contain `sh`, `ping`, `tcpdump`, and
+the observer tools used by the existing evidence helpers.
+
+Required node variables are the same as the other two-node tests:
+
+```text
+ONCACHE_M3_E2E_NODE_A=<node name>
+ONCACHE_M3_E2E_NODE_B=<node name>
+INSTALL_E2E_WORKLOAD_IMAGE=oncache-agent:m3-e2e
+```
+
+By default the test uses the local chart and overrides only the agent image.
+Set `ONCACHE_INSTALL_E2E_STRICT=1` with the published OCI chart and leave
+`ONCACHE_INSTALL_E2E_IMAGE` empty to exercise the no-override Helm command.
+Evidence is written to `ONCACHE_INSTALL_E2E_EVIDENCE` or a temporary directory.

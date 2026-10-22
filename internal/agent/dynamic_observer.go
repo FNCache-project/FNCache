@@ -87,7 +87,7 @@ func (o *DynamicObserver) buildObserver(ctx context.Context, snapshot kube.Snaps
 	links := o.rememberEndpointScan(baseLinks, localPods, endpoints)
 	observer, err := controlplane.NewObserver(o.sources, controlplane.ObservationInput{
 		Generation:       o.generation.Add(1),
-		PreflightRequest: discovery.PreflightRequest{Node: node.Identity, PinRoot: o.config.PinRoot, StateDir: o.config.StateDir, RuntimeURI: o.config.RuntimeEndpoint, Overlay: o.config.Overlay.Type},
+		PreflightRequest: discovery.PreflightRequest{Node: node.Identity, PinRoot: o.config.PinRoot, StateDir: o.config.StateDir, InstallationID: o.config.InstallationID, ELFBuildID: o.config.Datapath.ELFBuildID, RuntimeURI: o.config.RuntimeEndpoint, Overlay: o.config.Overlay.Type},
 		FlannelRequest:   flannelRequest,
 		MarkerRule:       flannel.MarkerRuleSpec{Chain: o.config.Markers.Chain, Comment: o.config.Markers.Comment},
 		Pods:             localPods, TCLinks: links, BaseTCLinks: baseLinks, EndpointScanSkipped: endpoints.Skipped,
