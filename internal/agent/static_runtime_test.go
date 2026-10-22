@@ -29,6 +29,14 @@ func TestValidateStaticRuntimeConfigRejectsMismatchedPinRoot(t *testing.T) {
 	}
 }
 
+func TestValidateStaticRuntimeConfigRejectsMismatchedStatePath(t *testing.T) {
+	config := validStaticRuntimeConfig()
+	config.Preflight.StateDir = "/var/lib/oncache/other"
+	if err := validateStaticRuntimeConfig(config); err == nil {
+		t.Fatal("mismatched state paths were accepted")
+	}
+}
+
 func TestMergeEndpointLinksIsStableAndDeduplicated(t *testing.T) {
 	base := []resolver.LinkIdentity{{IfIndex: 2}}
 	endpoints := map[string]resolver.Endpoint{
@@ -68,7 +76,7 @@ func validStaticRuntimeConfig() StaticRuntimeConfig {
 	return StaticRuntimeConfig{
 		ELFPath: "/var/lib/oncache/build/FNCache/bpf/tc_prog_kern.o", PinRoot: "/sys/fs/bpf/oncache/v1", StatePath: filepath.Join("/var/lib/oncache/v1", "state.json"),
 		InstallationID: "install-a", ELFBuildID: "build-a", Generation: 1, HeartbeatNS: 1, HeartbeatTimeoutNS: 5,
-		Preflight: discovery.PreflightRequest{Node: resolver.NodeIdentity{Name: "node-a", UID: "node-uid"}, PinRoot: "/sys/fs/bpf/oncache/v1", RuntimeURI: "unix:///run/containerd/containerd.sock", Overlay: "flannel-vxlan"},
+		Preflight: discovery.PreflightRequest{Node: resolver.NodeIdentity{Name: "node-a", UID: "node-uid"}, PinRoot: "/sys/fs/bpf/oncache/v1", StateDir: "/var/lib/oncache/v1", RuntimeURI: "unix:///run/containerd/containerd.sock", Overlay: "flannel-vxlan"},
 		Flannel:   flannel.DiscoveryRequest{MissMask: 0x04, EstablishedMask: 0x08, IPTablesBackend: "iptables-nft"},
 		Marker:    flannel.MarkerRuleSpec{Chain: "ONCACHE", Comment: "oncache:install-a"},
 		TCLinks:   []resolver.LinkIdentity{{IfIndex: 2}},

@@ -169,6 +169,7 @@ func hasFixedTCConflict(output []byte) bool {
 }
 
 type tcFilterJSON struct {
+	Kind    string          `json:"kind"`
 	Pref    json.RawMessage `json:"pref"`
 	Handle  json.RawMessage `json:"handle"`
 	Options struct {
@@ -212,7 +213,7 @@ func hasFixedTCConflictWithOwnership(output []byte, owned []ownedTCFilter) bool 
 			// iproute2 emits a second, detail-less record for a BPF filter in
 			// some kernels. A matching detailed record is the ownership proof;
 			// an otherwise-unidentified slot remains a conflict.
-			if prefOK && !handleOK && filter.Options.Name == "" && filter.Options.Prog.ID == 0 && ownedPref[pref] {
+			if filter.Kind == "bpf" && prefOK && !handleOK && filter.Options.Name == "" && filter.Options.Prog.ID == 0 && ownedPref[pref] {
 				continue
 			}
 			return true

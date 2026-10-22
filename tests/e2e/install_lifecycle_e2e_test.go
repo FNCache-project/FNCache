@@ -51,6 +51,8 @@ func TestOneCommandInstallLifecycleE2E(t *testing.T) {
 	waitM4Pod(t, namespace, "pod-a")
 	waitM4Pod(t, namespace, "pod-b")
 	installObserver(t, namespace, nodeA, workloadImage)
+	const observerB = "oncache-install-observer-b"
+	installObserverNamed(t, namespace, observerB, nodeB, workloadImage)
 	verifyInstallEvidence(t, namespace, evidence, "initial")
 	waitControlEnabled(t, namespace, evidence)
 
@@ -76,17 +78,28 @@ func TestOneCommandInstallLifecycleE2E(t *testing.T) {
 	agent := agentPodForNode(t, nodeA)
 	signalAgent(t, agent, "KILL")
 	waitHeartbeatStable(t, namespace, 6*time.Second, evidence, "install-heartbeat-timeout")
+	fallbackCapture := startAccelerationCapture(t, namespace, evidence, "install-fallback", podAIP, podBIP)
 	assertPing(t, namespace, podBIP, 2)
+	fallbackFlannel, _ := fallbackCapture()
+	if !hasPacket(fallbackFlannel) {
+		t.Fatalf("heartbeat timeout did not fall back to Flannel: flannel=%q", fallbackFlannel)
+	}
 	installLifecycleRelease(t, chart, agentImage, release, strict)
 	waitAgentPodsStable(t, nodeA, nodeB)
 	waitControlEnabled(t, namespace, evidence)
 	assertReadyz(t, nodeA, nodeB)
+	recoveredCapture := startAccelerationCapture(t, namespace, evidence, "install-recovered", podAIP, podBIP)
 	assertPing(t, namespace, podBIP, 2)
+	recoveredFlannel, recoveredUnderlay := recoveredCapture()
+	if hasPacket(recoveredFlannel) || !hasPacket(recoveredUnderlay) {
+		t.Fatalf("recovered flow did not show Flannel bypass: flannel=%q underlay=%q", recoveredFlannel, recoveredUnderlay)
+	}
+	strictAccelerationEvidence(t, namespace, evidence, "install-recovered")
 
 	if _, err := run("helm", "uninstall", release, "--namespace", "kube-system", "--wait"); err != nil {
 		t.Fatal(err)
 	}
-	assertOwnedPinsRemoved(t, namespace)
+	assertOwnedPinsRemoved(t, namespace, m4ObserverPod, observerB)
 }
 
 func installLifecycleRelease(t *testing.T, chart, image, release string, strict bool) {
@@ -125,10 +138,31 @@ func verifyInstallEvidence(t *testing.T, namespace, evidence, label string) {
 	}
 }
 
-func assertOwnedPinsRemoved(t *testing.T, namespace string) {
+func assertOwnedPinsRemoved(t *testing.T, namespace string, observers ...string) {
 	t.Helper()
-	command := "test ! -e /sys/fs/bpf/oncache/v1/maps/control_map && test ! -e /sys/fs/bpf/oncache/v1/programs/tc_masq"
-	if _, err := runObserver(namespace, "sh", "-c", command); err != nil {
-		t.Fatalf("owned BPF pins remain after Helm uninstall: %v", err)
+	command := `set -eu
+root=/sys/fs/bpf/oncache/v1
+if [ -d "$root" ]; then
+  find "$root" -mindepth 2 -type f -print
+fi
+tc=/opt/oncache/sbin/tc
+ip=/opt/oncache/sbin/ip
+for dev in $($ip -o link show | awk -F': ' '{print $2}' | cut -d@ -f1); do
+  for hook in ingress egress; do
+    filters=$($tc -j filter show dev "$dev" "$hook")
+    if printf '%s' "$filters" | grep -Eq '"bpf_name":"tc_(init_e|restore|masq|init_in)"'; then
+      printf 'ONCache TC filter remains on %s %s: %s\n' "$dev" "$hook" "$filters"
+      exit 1
+    fi
+  done
+done`
+	for _, observer := range observers {
+		output, err := runObserverPod(namespace, observer, "sh", "-c", command)
+		if err != nil {
+			t.Fatalf("owned objects remain or inspection failed on observer %s: err=%v output=%s", observer, err, output)
+		}
+		if strings.TrimSpace(output) != "" {
+			t.Fatalf("owned BPF pins remain after Helm uninstall on observer %s: %s", observer, output)
+		}
 	}
 }

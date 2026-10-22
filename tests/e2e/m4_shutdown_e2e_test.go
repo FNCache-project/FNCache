@@ -93,6 +93,10 @@ func TestM4ShutdownE2E(t *testing.T) {
 }
 
 func installObserver(t *testing.T, namespace, node, image string) {
+	installObserverNamed(t, namespace, m4ObserverPod, node, image)
+}
+
+func installObserverNamed(t *testing.T, namespace, name, node, image string) {
 	t.Helper()
 	manifest := fmt.Sprintf(`apiVersion: v1
 kind: Pod
@@ -124,9 +128,9 @@ spec:
       hostPath:
         path: /opt/oncache
         type: Directory
-`, m4ObserverPod, namespace, node, image)
+	`, name, namespace, node, image)
 	applyManifest(t, []byte(manifest))
-	if _, err := run("kubectl", "-n", namespace, "wait", "--for=jsonpath={.status.phase}=Running", "pod/"+m4ObserverPod, "--timeout=60s"); err != nil {
+	if _, err := run("kubectl", "-n", namespace, "wait", "--for=jsonpath={.status.phase}=Running", "pod/"+name, "--timeout=60s"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -368,7 +372,11 @@ func mustObserverDump(t *testing.T, namespace, evidence, label string) string {
 }
 
 func runObserver(namespace string, args ...string) (string, error) {
-	full := append([]string{"kubectl", "-n", namespace, "exec", m4ObserverPod, "--"}, args...)
+	return runObserverPod(namespace, m4ObserverPod, args...)
+}
+
+func runObserverPod(namespace, pod string, args ...string) (string, error) {
+	full := append([]string{"kubectl", "-n", namespace, "exec", pod, "--"}, args...)
 	return run(full[0], full[1:]...)
 }
 
