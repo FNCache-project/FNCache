@@ -135,6 +135,45 @@ func TestInformerSourceInformerErrorRecoversAfterSuccessfulEvent(t *testing.T) {
 	}
 }
 
+func TestInformerSourceInformerErrorRecoveryIsScopedToResource(t *testing.T) {
+	client := fake.NewSimpleClientset(informerNode())
+	source, err := NewInformerSource(client, NewSnapshotStore(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go source.Run(ctx)
+	if err := source.WaitForSync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	invalid := informerNode()
+	invalid.Spec.PodCIDR = "not-a-cidr"
+	source.addNode(invalid)
+	if source.LastError() == nil {
+		t.Fatal("invalid Node event did not record an error")
+	}
+	if err := source.ProbeAPI(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	source.addPod(informerPod())
+	health := source.Health()
+	if health.InformerError == nil || health.FreshAt(health.LastProbeAt, time.Minute) {
+		t.Fatalf("Pod recovery cleared an unresolved Node error: %+v", health)
+	}
+
+	source.addNode(informerNode())
+	if err := source.ProbeAPI(ctx); err != nil {
+		t.Fatal(err)
+	}
+	health = source.Health()
+	if health.InformerError != nil || !health.FreshAt(health.LastProbeAt, time.Minute) {
+		t.Fatalf("informer health did not recover after Node recovery: %+v", health)
+	}
+}
+
 func TestInformerSourceProbeAPIRecordsFailure(t *testing.T) {
 	client := fake.NewSimpleClientset(informerNode())
 	source, err := NewInformerSource(client, NewSnapshotStore(), 0)

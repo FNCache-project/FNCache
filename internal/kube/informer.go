@@ -23,7 +23,8 @@ type InformerSource struct {
 	client           kubernetes.Interface
 	store            *SnapshotStore
 	errMu            sync.RWMutex
-	lastErr          error
+	podErr           error
+	nodeErr          error
 	healthMu         sync.RWMutex
 	synced           bool
 	lastProbeAt      time.Time
@@ -117,29 +118,48 @@ func (s *InformerSource) WaitForSync(ctx context.Context) error {
 func (s *InformerSource) LastError() error {
 	s.errMu.RLock()
 	defer s.errMu.RUnlock()
-	return s.lastErr
+	if s.podErr != nil {
+		return s.podErr
+	}
+	return s.nodeErr
 }
 
-func (s *InformerSource) recordError(err error) {
+func (s *InformerSource) recordError(slot *error, err error) {
 	if err == nil {
 		return
 	}
 	s.errMu.Lock()
-	if s.lastErr == nil {
-		s.lastErr = err
+	if *slot == nil {
+		*slot = err
 	}
 	s.errMu.Unlock()
 }
 
-func (s *InformerSource) clearError() {
+func (s *InformerSource) recordPodError(err error) {
+	s.recordError(&s.podErr, err)
+}
+
+func (s *InformerSource) recordNodeError(err error) {
+	s.recordError(&s.nodeErr, err)
+}
+
+func (s *InformerSource) clearError(slot *error) {
 	s.errMu.Lock()
 	defer s.errMu.Unlock()
 	s.healthMu.RLock()
 	synced := s.synced
 	s.healthMu.RUnlock()
 	if synced {
-		s.lastErr = nil
+		*slot = nil
 	}
+}
+
+func (s *InformerSource) clearPodError() {
+	s.clearError(&s.podErr)
+}
+
+func (s *InformerSource) clearNodeError() {
+	s.clearError(&s.nodeErr)
 }
 
 func (s *InformerSource) addPod(obj interface{}) {
@@ -150,12 +170,12 @@ func (s *InformerSource) addPod(obj interface{}) {
 func (s *InformerSource) updatePod(oldObj, newObj interface{}) {
 	oldPod, err := podObject(oldObj)
 	if err != nil {
-		s.recordError(err)
+		s.recordPodError(err)
 		return
 	}
 	newPod, err := podObject(newObj)
 	if err != nil {
-		s.recordError(err)
+		s.recordPodError(err)
 		return
 	}
 	if oldPod.UID != newPod.UID {
@@ -168,11 +188,11 @@ func (s *InformerSource) updatePod(oldObj, newObj interface{}) {
 func (s *InformerSource) deletePod(obj interface{}) {
 	pod, err := podObject(obj)
 	if err != nil {
-		s.recordError(err)
+		s.recordPodError(err)
 		return
 	}
 	s.store.DeletePod(string(pod.UID))
-	s.clearError()
+	s.clearPodError()
 	s.notifyPodEvent(obj, nil)
 }
 
@@ -186,10 +206,10 @@ func (s *InformerSource) upsertPod(obj interface{}) {
 		}
 	}
 	if err != nil {
-		s.recordError(err)
+		s.recordPodError(err)
 		return
 	}
-	s.clearError()
+	s.clearPodError()
 }
 
 func (s *InformerSource) addNode(obj interface{}) {
@@ -200,12 +220,12 @@ func (s *InformerSource) addNode(obj interface{}) {
 func (s *InformerSource) updateNode(oldObj, newObj interface{}) {
 	oldNode, err := nodeObject(oldObj)
 	if err != nil {
-		s.recordError(err)
+		s.recordNodeError(err)
 		return
 	}
 	newNode, err := nodeObject(newObj)
 	if err != nil {
-		s.recordError(err)
+		s.recordNodeError(err)
 		return
 	}
 	if oldNode.UID != newNode.UID {
@@ -218,11 +238,11 @@ func (s *InformerSource) updateNode(oldObj, newObj interface{}) {
 func (s *InformerSource) deleteNode(obj interface{}) {
 	node, err := nodeObject(obj)
 	if err != nil {
-		s.recordError(err)
+		s.recordNodeError(err)
 		return
 	}
 	s.store.DeleteNode(node.Name, string(node.UID))
-	s.clearError()
+	s.clearNodeError()
 	s.notifyNodeEvent(obj, nil)
 }
 
@@ -236,10 +256,10 @@ func (s *InformerSource) upsertNode(obj interface{}) {
 		}
 	}
 	if err != nil {
-		s.recordError(err)
+		s.recordNodeError(err)
 		return
 	}
-	s.clearError()
+	s.clearNodeError()
 }
 
 func podObject(obj interface{}) (*corev1.Pod, error) {
