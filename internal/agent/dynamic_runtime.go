@@ -228,6 +228,7 @@ func (r *DynamicRuntime) Run(ctx context.Context) error {
 }
 
 // cleanupOwnedObjects removes only objects proven to belong to this installation.
+// cleanupOwnedObjects removes only objects proven to belong to this installation.
 func (r *DynamicRuntime) cleanupOwnedObjects(ctx context.Context) error {
 	_, err := cleanup.Run(ctx, cleanup.Options{
 		PinRoot: r.config.PinRoot, StatePath: filepath.Join(r.config.StateDir, "state.json"), InstallationID: r.config.InstallationID,

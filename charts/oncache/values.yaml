@@ -67,6 +67,7 @@ security:
       - SYS_PTRACE
 
 hostPID: true
+terminationGracePeriodSeconds: 45
 
 hostPaths:
   bpf: /sys/fs/bpf
@@ -81,7 +82,6 @@ affinity: {}
 
 probes:
   enabled: true
-  port: 9090
   startup:
     periodSeconds: 2
     failureThreshold: 30
