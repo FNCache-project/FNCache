@@ -1,7 +1,7 @@
 M4_SHUTDOWN_IMAGE ?= oncache-agent:m4-shutdown
 M4_ACCEL_IMAGE ?= oncache-agent:m4-final5
 
-.PHONY: build-m4-shutdown-image test-m4-shutdown test-m4-acceleration test-m5-lifecycle test-m5-fault
+.PHONY: build-m4-shutdown-image test-m4-shutdown test-m4-acceleration test-m5-lifecycle test-m5-fault test-one-command-install
 
 build-m4-shutdown-image:
 	$(MAKE) build-m3-e2e-image M3_E2E_IMAGE="$(M4_SHUTDOWN_IMAGE)"
@@ -21,3 +21,7 @@ test-m5-lifecycle:
 test-m5-fault:
 	test -n "$(M4_ACCEL_IMAGE)"
 	ONCACHE_M5_FAULT_E2E=1 ONCACHE_M3_E2E_IMAGE="$(M4_ACCEL_IMAGE)" $(GO) test -tags=m3e2e -count=1 -run '^TestM5FaultInjectionE2E$$' ./e2e
+
+test-one-command-install:
+	test -n "$(INSTALL_E2E_WORKLOAD_IMAGE)"
+	ONCACHE_INSTALL_E2E=1 ONCACHE_INSTALL_E2E_WORKLOAD_IMAGE="$(INSTALL_E2E_WORKLOAD_IMAGE)" $(GO) test -tags=m3e2e -count=1 -run '^TestOneCommandInstallLifecycleE2E$$' ./e2e

@@ -51,6 +51,8 @@ type StaticRuntime struct {
 }
 
 func NewStaticRuntime(ctx context.Context, config StaticRuntimeConfig) (*StaticRuntime, error) {
+	config.Preflight.InstallationID = config.InstallationID
+	config.Preflight.ELFBuildID = config.ELFBuildID
 	if err := validateStaticRuntimeConfig(config); err != nil {
 		return nil, err
 	}
@@ -149,6 +151,12 @@ func validateStaticRuntimeConfig(config StaticRuntimeConfig) error {
 	}
 	if config.StatePath == "" || !filepath.IsAbs(config.StatePath) || filepath.Clean(config.StatePath) == string(filepath.Separator) {
 		return fmt.Errorf("StatePath must be a dedicated absolute file")
+	}
+	if config.Preflight.StateDir == "" || !filepath.IsAbs(config.Preflight.StateDir) || filepath.Clean(config.Preflight.StateDir) == string(filepath.Separator) {
+		return fmt.Errorf("preflight StateDir must be a dedicated absolute directory")
+	}
+	if filepath.Clean(config.StatePath) != filepath.Join(filepath.Clean(config.Preflight.StateDir), "state.json") {
+		return fmt.Errorf("preflight StateDir must match StatePath")
 	}
 	if config.Preflight.Node.Name == "" || config.Preflight.Node.UID == "" || config.Preflight.RuntimeURI == "" {
 		return fmt.Errorf("node identity and runtime endpoint are required")

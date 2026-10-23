@@ -61,3 +61,16 @@ func TestLinuxConflictParsers(t *testing.T) {
 		t.Fatal("drifted custom marker was not treated as a TOS conflict")
 	}
 }
+
+func TestLinuxConflictParserDoesNotHideForeignNonBPFFilter(t *testing.T) {
+	output := []byte(`[{"pref":1000,"kind":"flower"},{"pref":1000,"kind":"bpf","options":{"handle":"0x100","bpf_name":"tc_init_e","prog":{"id":10}}}]`)
+	owned := []ownedTCFilter{{Program: "tc_init_e", Priority: 1000, Handle: 0x100, ProgramID: 10}}
+	if !hasFixedTCConflictWithOwnership(output, owned) {
+		t.Fatal("foreign non-BPF fixed-priority filter was not detected")
+	}
+
+	bpfDuplicate := []byte(`[{"pref":1000,"kind":"bpf"},{"pref":1000,"kind":"bpf","options":{"handle":"0x100","bpf_name":"tc_init_e","prog":{"id":10}}}]`)
+	if hasFixedTCConflictWithOwnership(bpfDuplicate, owned) {
+		t.Fatal("detail-less BPF duplicate was treated as a foreign conflict")
+	}
+}

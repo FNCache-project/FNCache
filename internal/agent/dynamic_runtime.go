@@ -522,7 +522,7 @@ func (r *DynamicRuntime) initializeDatapath(ctx context.Context) error {
 			EgressCacheMaxEntries: r.config.Maps.EgressCacheMaxEntries, PolicyCacheMaxEntries: r.config.Maps.PolicyCacheMaxEntries,
 			DevMapMaxEntries: r.config.Maps.DevMapMaxEntries,
 		},
-		Preflight: discovery.PreflightRequest{Node: node.Identity, PinRoot: r.config.PinRoot, StateDir: r.config.StateDir, RuntimeURI: r.config.RuntimeEndpoint, Overlay: r.config.Overlay.Type},
+		Preflight: discovery.PreflightRequest{Node: node.Identity, PinRoot: r.config.PinRoot, StateDir: r.config.StateDir, InstallationID: r.config.InstallationID, ELFBuildID: r.config.Datapath.ELFBuildID, RuntimeURI: r.config.RuntimeEndpoint, Overlay: r.config.Overlay.Type},
 		Flannel:   r.flannelDiscoveryRequest(),
 		Marker:    r.markerRuleSpec(),
 	})
