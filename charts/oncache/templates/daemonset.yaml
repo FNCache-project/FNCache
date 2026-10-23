@@ -32,7 +32,7 @@ spec:
         {{- toYaml .Values.affinity | nindent 8 }}
       containers:
         - name: agent
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- with .Values.agent.command }}
           command:

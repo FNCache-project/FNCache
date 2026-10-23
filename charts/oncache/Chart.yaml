@@ -3,4 +3,4 @@ name: oncache
 description: ONCache node agent for controlled Kubernetes/K3s Flannel VXLAN clusters
 type: application
 version: 0.5.0
-appVersion: "0.5.0-pre"
+appVersion: "v0.5.0-pre"

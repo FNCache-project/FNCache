@@ -4,12 +4,6 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: Image tag to publish
-        required: true
-        default: dev
 
 permissions:
   contents: read
@@ -47,9 +41,7 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
-            type=ref,event=tag
-            type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
-            type=sha,prefix=sha-
+            type=raw,value=${{ github.ref_name }}
 
       - name: Build and push image
         id: build
@@ -77,15 +69,17 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Package and publish Helm chart
-        if: github.event_name == 'push'
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           chart_version="${RELEASE_TAG#v}"
+          helm lint charts/oncache
           helm package charts/oncache \
             --version "${chart_version}" \
-            --app-version "${chart_version}" \
+            --app-version "${RELEASE_TAG}" \
             --destination "${RUNNER_TEMP}"
+          helm template fncache "${RUNNER_TEMP}/oncache-${chart_version}.tgz" > "${RUNNER_TEMP}/rendered.yaml"
+          grep -Fq "image: \"${IMAGE_NAME}:${RELEASE_TAG}\"" "${RUNNER_TEMP}/rendered.yaml"
           helm push "${RUNNER_TEMP}/oncache-${chart_version}.tgz" \
             oci://ghcr.io/fncache-project/charts
