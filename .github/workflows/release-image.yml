@@ -43,6 +43,20 @@ jobs:
           tags: |
             type=raw,value=${{ github.ref_name }}
 
+      - name: Validate release image tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          GENERATED_TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          expected="${IMAGE_NAME}:${RELEASE_TAG}"
+          if ! grep -Fxq "${expected}" <<< "${GENERATED_TAGS}"; then
+            echo "::error::Release tag '${RELEASE_TAG}' was not preserved as the image tag"
+            echo "Generated tags:"
+            printf '%s\n' "${GENERATED_TAGS}"
+            exit 1
+          fi
+
       - name: Build and push image
         id: build
         uses: docker/build-push-action@v6
