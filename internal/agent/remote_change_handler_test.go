@@ -142,6 +142,36 @@ func TestRemoteChangeHandlerInvalidatesAndPublishesLatestMapping(t *testing.T) {
 	}
 }
 
+func TestRemoteChangeHandlerRemovesMappingAfterRemotePodTerminates(t *testing.T) {
+	events := []string{}
+	maps := &remoteMaps{}
+	publisher := &localHandlerPublisher{events: &events}
+	store := remoteChangeStore(t)
+	handler := newRemoteChangeHandler(t, store, maps, &events, publisher)
+	key := reconcile.ReconcileKey{Kind: reconcile.ReconcileRemoteEndpoint, UID: "pod-remote"}
+
+	if err := handler.Handle(context.Background(), key); err != nil {
+		t.Fatal(err)
+	}
+	pod, ok := store.GetPod("pod-remote")
+	if !ok {
+		t.Fatal("remote Pod disappeared from snapshot")
+	}
+	pod.Phase = "Succeeded"
+	if err := store.UpsertPod(pod); err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.Handle(context.Background(), key); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := publisher.desired.RemoteEndpoints[netip.MustParseAddr("10.42.1.2")]; ok {
+		t.Fatalf("terminal remote mapping was retained: %#v", publisher.desired.RemoteEndpoints)
+	}
+	if len(maps.calls) != 6 || maps.remoteMappings != 2 {
+		t.Fatalf("terminal remote mapping was not invalidated and rebuilt: clears=%v remote=%d", maps.calls, maps.remoteMappings)
+	}
+}
+
 func TestRemoteChangeHandlerGlobalRefreshesBaseDatapath(t *testing.T) {
 	events := []string{}
 	maps := &remoteMaps{}

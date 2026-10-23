@@ -64,6 +64,10 @@ func TestResolveEndpointRejectsInvalidPodSnapshots(t *testing.T) {
 		"host network": func(p *PodSnapshot) { p.HostNetwork = true },
 		"deleting":     func(p *PodSnapshot) { p.Deleting = true },
 		"invalid IP":   func(p *PodSnapshot) { p.PodIPv4 = netip.Addr{} },
+		"pending":      func(p *PodSnapshot) { p.Phase = "Pending" },
+		"unknown":      func(p *PodSnapshot) { p.Phase = "Unknown" },
+		"succeeded":    func(p *PodSnapshot) { p.Phase = "Succeeded" },
+		"failed":       func(p *PodSnapshot) { p.Phase = "Failed" },
 	} {
 		pod := endpointTestPod()
 		mutate(&pod)

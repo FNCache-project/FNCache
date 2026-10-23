@@ -109,6 +109,41 @@ func TestBuildDesiredStateBuildsRemoteEndpoints(t *testing.T) {
 	}
 }
 
+func TestBuildDesiredStateSkipsUnreadyRemotePods(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		phase    string
+		deleting bool
+	}{
+		{name: "pending", phase: "Pending"},
+		{name: "unknown", phase: "Unknown"},
+		{name: "succeeded", phase: "Succeeded"},
+		{name: "failed", phase: "Failed"},
+		{name: "deleting", phase: "Running", deleting: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			remoteIP := netip.MustParseAddr("10.42.1.2")
+			pod := desiredPod("pod-remote", "node-b", remoteIP)
+			pod.Phase = test.phase
+			pod.Deleting = test.deleting
+			snapshot := Snapshot{
+				Nodes: map[string]NodeSnapshot{
+					"node-a": {Identity: resolver.NodeIdentity{Name: "node-a", UID: "node-1"}},
+					"node-b": {Identity: resolver.NodeIdentity{Name: "node-b", UID: "node-2"}, InternalIPv4: netip.MustParseAddr("192.0.2.11")},
+				},
+				Pods: map[string]resolver.PodSnapshot{"pod-remote": pod},
+			}
+			desired, err := BuildDesiredState(snapshot, reconcile.DesiredState{}, "node-a", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(desired.RemoteEndpoints) != 0 {
+				t.Fatalf("unready remote mapping was generated: %#v", desired.RemoteEndpoints)
+			}
+		})
+	}
+}
+
 func TestBuildDesiredStateSkipsRemotePodWithoutNodeIP(t *testing.T) {
 	remoteIP := netip.MustParseAddr("10.42.1.2")
 	snapshot := Snapshot{

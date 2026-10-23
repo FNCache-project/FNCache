@@ -26,6 +26,12 @@ type PodSnapshot struct {
 	ResourceVersion string
 }
 
+// IsEndpointPhaseReady reports whether a Pod phase permits endpoint resolution.
+// An empty phase is retained as an unspecified phase for static/test snapshots.
+func IsEndpointPhaseReady(phase string) bool {
+	return phase == "" || phase == "Running"
+}
+
 type EndpointResolver interface {
 	Resolve(context.Context, PodSnapshot) (Endpoint, error)
 	Validate(context.Context, Endpoint) error
@@ -132,7 +138,7 @@ func validatePodSnapshot(pod PodSnapshot) error {
 	if !pod.PodIPv4.Is4() {
 		return fmt.Errorf("%w: endpoint requires IPv4", ErrUnsupported)
 	}
-	if pod.Phase != "" && pod.Phase != "Running" {
+	if !IsEndpointPhaseReady(pod.Phase) {
 		return fmt.Errorf("%w: pod phase is %s", ErrEndpointNotReady, pod.Phase)
 	}
 	return nil

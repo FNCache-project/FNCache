@@ -39,7 +39,7 @@ func BuildDesiredState(snapshot Snapshot, base reconcile.DesiredState, localNode
 		desired.LocalEndpoints[uid] = cloneEndpoint(endpoint)
 	}
 	for _, pod := range snapshot.Pods {
-		if pod.NodeName == "" || pod.NodeName == localNode || pod.HostNetwork || pod.Deleting || !pod.PodIPv4.IsValid() || !pod.PodIPv4.Is4() {
+		if pod.NodeName == "" || pod.NodeName == localNode || pod.HostNetwork || pod.Deleting || !resolver.IsEndpointPhaseReady(pod.Phase) || !pod.PodIPv4.IsValid() || !pod.PodIPv4.Is4() {
 			continue
 		}
 		node, ok := snapshot.Nodes[pod.NodeName]
