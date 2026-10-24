@@ -12,7 +12,7 @@ func TestStaticReconcileSucceeded(t *testing.T) {
 		state reconcile.AgentState
 		want  bool
 	}{
-		{name: "ready", state: reconcile.AgentReady, want: true},
+		{name: "ready", state: reconcile.AgentReady},
 		{name: "disabled", state: reconcile.AgentDisabled, want: true},
 		{name: "bootstrapping", state: reconcile.AgentBootstrapping},
 		{name: "reconciling", state: reconcile.AgentReconciling},

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"net/netip"
 	"path/filepath"
@@ -8,12 +9,23 @@ import (
 
 	"github.com/cat-cc-Lcos/FNCache/internal/discovery"
 	"github.com/cat-cc-Lcos/FNCache/internal/overlay/flannel"
+	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
 	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 )
 
 type fakeCloser struct {
 	closed bool
 	err    error
+}
+
+type staticRuntimeControl struct {
+	disableCalls int
+	err          error
+}
+
+func (c *staticRuntimeControl) Disable(context.Context) error {
+	c.disableCalls++
+	return c.err
 }
 
 func (c *fakeCloser) Close() error {
@@ -69,6 +81,49 @@ func TestStaticRuntimeCloseIsIdempotent(t *testing.T) {
 	}
 	if err := runtime.Close(); err != nil {
 		t.Fatalf("second close failed: %v", err)
+	}
+}
+
+func TestFinalizeStaticRunOnceDisablesReadyFastPath(t *testing.T) {
+	control := &staticRuntimeControl{}
+	result, err := finalizeStaticRunOnce(context.Background(), control, reconcile.ReconcileResult{State: reconcile.AgentReady})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != reconcile.AgentDisabled {
+		t.Fatalf("static one-shot result state=%q, want %q", result.State, reconcile.AgentDisabled)
+	}
+	if control.disableCalls != 1 {
+		t.Fatalf("disable calls=%d, want 1", control.disableCalls)
+	}
+}
+
+func TestFinalizeStaticRunOnceLeavesNonReadyStateUntouched(t *testing.T) {
+	control := &staticRuntimeControl{}
+	result, err := finalizeStaticRunOnce(context.Background(), control, reconcile.ReconcileResult{State: reconcile.AgentDisabled})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != reconcile.AgentDisabled {
+		t.Fatalf("static one-shot result state=%q, want %q", result.State, reconcile.AgentDisabled)
+	}
+	if control.disableCalls != 0 {
+		t.Fatalf("disable calls=%d, want 0", control.disableCalls)
+	}
+}
+
+func TestFinalizeStaticRunOncePropagatesDisableFailure(t *testing.T) {
+	wantErr := errors.New("control map unavailable")
+	control := &staticRuntimeControl{err: wantErr}
+	result, err := finalizeStaticRunOnce(context.Background(), control, reconcile.ReconcileResult{State: reconcile.AgentReady})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("finalizeStaticRunOnce error=%v, want %v", err, wantErr)
+	}
+	if result.State != reconcile.AgentReady {
+		t.Fatalf("failed static one-shot result state=%q, want %q", result.State, reconcile.AgentReady)
+	}
+	if control.disableCalls != 1 {
+		t.Fatalf("disable calls=%d, want 1", control.disableCalls)
 	}
 }
 
