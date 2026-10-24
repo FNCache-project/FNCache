@@ -1,6 +1,10 @@
 package discovery
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestLinuxCommandParsers(t *testing.T) {
 	output := []byte("bpf_map_lookup_elem bpf_spin_unlock direct_action")
@@ -72,5 +76,17 @@ func TestLinuxConflictParserDoesNotHideForeignNonBPFFilter(t *testing.T) {
 	bpfDuplicate := []byte(`[{"pref":1000,"kind":"bpf"},{"pref":1000,"kind":"bpf","options":{"handle":"0x100","bpf_name":"tc_init_e","prog":{"id":10}}}]`)
 	if hasFixedTCConflictWithOwnership(bpfDuplicate, owned) {
 		t.Fatal("detail-less BPF duplicate was treated as a foreign conflict")
+	}
+}
+
+func TestLoadOwnershipEvidenceRequiresDirectAction(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	data := []byte(`{"schemaVersion":1,"installationID":"install-a","nodeUID":"node-a","elfBuildID":"sha256:test","bpfABI":1,"attachments":[{"Program":"tc_init_e","Priority":1000,"Handle":256,"ProgramID":10,"DirectAction":false},{"Program":"tc_restore","Priority":1000,"Handle":257,"ProgramID":11,"DirectAction":true}]}`)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	evidence := loadOwnershipEvidence(path, "install-a", "node-a", "sha256:test")
+	if len(evidence.TCFilters) != 1 || evidence.TCFilters[0].Program != "tc_restore" {
+		t.Fatalf("non-direct-action ownership evidence was accepted: %+v", evidence.TCFilters)
 	}
 }

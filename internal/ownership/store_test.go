@@ -42,7 +42,7 @@ func TestStoreDoesNotPersistNetNSPath(t *testing.T) {
 	store, path := testStore(t)
 	state := testState()
 	state.Attachments = []reconcile.AttachmentState{{
-		Link: resolver.LinkIdentity{NetNSInode: 42, NetNSPath: "/proc/123/ns/net", IfIndex: 10, IfName: "eth0"},
+		Link: resolver.LinkIdentity{NetNSInode: 42, NetNSPath: "/proc/123/ns/net", IfIndex: 10, IfName: "eth0"}, DirectAction: true,
 	}}
 	if err := store.Commit(context.Background(), state); err != nil {
 		t.Fatal(err)
@@ -60,6 +60,15 @@ func TestStoreDoesNotPersistNetNSPath(t *testing.T) {
 	}
 	if got := loaded.Attachments[0].Link.NetNSPath; got != "" {
 		t.Fatalf("runtime netns path was restored from ownership state: %q", got)
+	}
+}
+
+func TestStoreRejectsNonDirectActionAttachment(t *testing.T) {
+	store, _ := testStore(t)
+	state := testState()
+	state.Attachments = []reconcile.AttachmentState{{DirectAction: false}}
+	if err := store.Commit(context.Background(), state); err == nil || !strings.Contains(err.Error(), "non-direct-action") {
+		t.Fatalf("non-direct-action ownership state was accepted: %v", err)
 	}
 }
 

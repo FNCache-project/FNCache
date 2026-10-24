@@ -99,10 +99,11 @@ type persistedObjectState struct {
 }
 
 type persistedAttachmentState struct {
-	Program   string `json:"Program"`
-	Priority  uint16 `json:"Priority"`
-	Handle    uint32 `json:"Handle"`
-	ProgramID uint32 `json:"ProgramID"`
+	Program      string `json:"Program"`
+	Priority     uint16 `json:"Priority"`
+	Handle       uint32 `json:"Handle"`
+	ProgramID    uint32 `json:"ProgramID"`
+	DirectAction bool   `json:"DirectAction"`
 }
 
 type persistedOwnershipState struct {
@@ -155,7 +156,7 @@ func loadOwnershipEvidence(path, installationID, nodeUID, elfBuildID string) own
 		}
 	}
 	for _, attachment := range state.Attachments {
-		if attachment.Program != "" && attachment.Priority != 0 && attachment.Handle != 0 && attachment.ProgramID != 0 {
+		if attachment.Program != "" && attachment.Priority != 0 && attachment.Handle != 0 && attachment.ProgramID != 0 && attachment.DirectAction {
 			evidence.TCFilters = append(evidence.TCFilters, ownedTCFilter{
 				Program: attachment.Program, Priority: attachment.Priority, Handle: attachment.Handle, ProgramID: attachment.ProgramID,
 			})

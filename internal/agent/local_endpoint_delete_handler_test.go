@@ -92,8 +92,8 @@ func deleteActualState() reconcile.ActualState {
 	return reconcile.ActualState{
 		Programs: map[string]reconcile.ProgramState{"tc_init_in": {ID: 11}, "tc_masq": {ID: 12}},
 		Attachments: []reconcile.AttachmentState{
-			{Link: resolver.LinkIdentity{NetNSInode: 42, IfIndex: 7}, Hook: string(datapath.HookIngress), Program: "tc_init_in", Priority: datapath.FixedTCPriority, Handle: 0x201, ProgramID: 11},
-			{Link: resolver.LinkIdentity{IfIndex: 8}, Hook: string(datapath.HookIngress), Program: "tc_masq", Priority: datapath.FixedTCPriority, Handle: 0x200, ProgramID: 12},
+			{Link: resolver.LinkIdentity{NetNSInode: 42, IfIndex: 7}, Hook: string(datapath.HookIngress), Program: "tc_init_in", Priority: datapath.FixedTCPriority, Handle: 0x201, ProgramID: 11, DirectAction: true},
+			{Link: resolver.LinkIdentity{IfIndex: 8}, Hook: string(datapath.HookIngress), Program: "tc_masq", Priority: datapath.FixedTCPriority, Handle: 0x200, ProgramID: 12, DirectAction: true},
 		},
 	}
 }

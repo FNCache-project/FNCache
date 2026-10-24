@@ -126,6 +126,11 @@ func validateState(state reconcile.OwnershipState) error {
 	if state.InstallationID == "" || state.NodeUID == "" {
 		return fmt.Errorf("ownership state installationID and nodeUID are required")
 	}
+	for _, attachment := range state.Attachments {
+		if !attachment.DirectAction {
+			return fmt.Errorf("ownership state contains a non-direct-action TC attachment")
+		}
+	}
 	return nil
 }
 

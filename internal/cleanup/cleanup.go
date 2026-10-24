@@ -237,6 +237,10 @@ func BuildPlan(state reconcile.OwnershipState, actual reconcile.ActualState, mar
 		if hasAttachment(unresolvedNetNS, owned) || state.Programs[owned.Program].ID != owned.ProgramID {
 			continue
 		}
+		if !owned.DirectAction {
+			plan.Blocked = append(plan.Blocked, Action{Kind: ActionTC, Identity: attachmentIdentity(owned), Evidence: []string{"persisted TC identity is not direct-action"}})
+			continue
+		}
 		if _, err := datapath.NewFixedFilter(owned.Link, owned.Program, owned.ProgramID, true); err != nil {
 			plan.Blocked = append(plan.Blocked, Action{Kind: ActionTC, Identity: attachmentIdentity(owned), Evidence: []string{"persisted TC identity is invalid"}})
 			continue
@@ -244,7 +248,7 @@ func BuildPlan(state reconcile.OwnershipState, actual reconcile.ActualState, mar
 		found, slotConflict := findAttachment(actual.Attachments, owned)
 		if found {
 			copy := owned
-			plan.Actions = append(plan.Actions, Action{Kind: ActionTC, Identity: attachmentIdentity(owned), Evidence: []string{"link identity", "program ID", "fixed handle"}, attachment: &copy})
+			plan.Actions = append(plan.Actions, Action{Kind: ActionTC, Identity: attachmentIdentity(owned), Evidence: []string{"link identity", "program ID", "fixed handle", "direct-action=true"}, attachment: &copy})
 		} else if slotConflict {
 			plan.Blocked = append(plan.Blocked, Action{Kind: ActionTC, Identity: attachmentIdentity(owned), Evidence: []string{"TC slot is occupied by a different program"}})
 		}
@@ -324,5 +328,5 @@ func findAttachment(list []reconcile.AttachmentState, wanted reconcile.Attachmen
 }
 
 func attachmentIdentity(a reconcile.AttachmentState) string {
-	return fmt.Sprintf("%d/%d/%s/%d/%d/%s/%d", a.Link.NetNSInode, a.Link.IfIndex, a.Hook, a.Priority, a.Handle, a.Program, a.ProgramID)
+	return fmt.Sprintf("%d/%d/%s/%d/%d/%s/%d/direct=%t", a.Link.NetNSInode, a.Link.IfIndex, a.Hook, a.Priority, a.Handle, a.Program, a.ProgramID, a.DirectAction)
 }

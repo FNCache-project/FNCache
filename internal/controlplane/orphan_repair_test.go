@@ -30,7 +30,7 @@ func (r *fakeOwnedMarkerRepairer) RepairOwnedMarker(_ context.Context, _ reconci
 func TestRepairOwnedOrphansRemovesOnlyStaleOwnedBaseAttachments(t *testing.T) {
 	desired := publishTestDesired()
 	actual := publishTestActual(desired)
-	stale := reconcile.AttachmentState{Link: resolver.LinkIdentity{IfIndex: 3}, Hook: string(datapath.HookEgress), Program: "tc_init_e", Priority: datapath.FixedTCPriority, Handle: 0x100, ProgramID: 10}
+	stale := reconcile.AttachmentState{Link: resolver.LinkIdentity{IfIndex: 3}, Hook: string(datapath.HookEgress), Program: "tc_init_e", Priority: datapath.FixedTCPriority, Handle: 0x100, ProgramID: 10, DirectAction: true}
 	foreign := stale
 	foreign.Link.IfIndex = 4
 	foreign.ProgramID = 99

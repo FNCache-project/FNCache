@@ -152,12 +152,13 @@ type MapState struct {
 }
 
 type AttachmentState struct {
-	Link      resolver.LinkIdentity
-	Hook      string
-	Program   string
-	Priority  uint16
-	Handle    uint32
-	ProgramID uint32
+	Link         resolver.LinkIdentity
+	Hook         string
+	Program      string
+	Priority     uint16
+	Handle       uint32
+	ProgramID    uint32
+	DirectAction bool
 }
 
 type RuleState struct {
