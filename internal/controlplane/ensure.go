@@ -63,7 +63,8 @@ func hasAttachment(attachments []reconcile.AttachmentState, expected datapath.TC
 			attachment.Program == expected.Program &&
 			attachment.ProgramID == expected.ProgramID &&
 			attachment.Priority == expected.Priority &&
-			attachment.Handle == expected.Handle {
+			attachment.Handle == expected.Handle &&
+			attachment.DirectAction == expected.DirectAction {
 			return true
 		}
 	}

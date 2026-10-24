@@ -53,11 +53,15 @@ func (s *TCScanner) Scan(ctx context.Context, links []resolver.LinkIdentity) (re
 		for _, filter := range filters {
 			actual.Attachments = append(actual.Attachments, reconcile.AttachmentState{
 				Link: filter.Link, Hook: string(filter.Hook), Program: filter.Program,
-				Priority: filter.Priority, Handle: filter.Handle, ProgramID: filter.ProgramID,
+				Priority: filter.Priority, Handle: filter.Handle, ProgramID: filter.ProgramID, DirectAction: filter.DirectAction,
 			})
 			if filter.Program == "" || filter.ProgramID == 0 {
 				actual.Conflicts = append(actual.Conflicts, discovery.Conflict{
 					Kind: "tc-filter", Identity: tcFilterIdentity(filter), Detail: "filter program identity is not verifiable",
+				})
+			} else if !filter.DirectAction && filter.Priority == FixedTCPriority && isFixedAttachment(filter) {
+				actual.Conflicts = append(actual.Conflicts, discovery.Conflict{
+					Kind: "tc-filter", Identity: tcFilterIdentity(filter), Detail: "TC BPF filter is not direct-action",
 				})
 			}
 		}

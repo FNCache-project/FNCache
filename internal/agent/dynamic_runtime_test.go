@@ -56,7 +56,7 @@ func (dynamicRuntimeTC) Scan(_ context.Context, links []resolver.LinkIdentity) (
 
 func dynamicRuntimeAttachment(link resolver.LinkIdentity, program string, programID uint32) reconcile.AttachmentState {
 	spec, _ := datapath.NewFixedFilter(link, program, programID, true)
-	return reconcile.AttachmentState{Link: spec.Link, Hook: string(spec.Hook), Program: spec.Program, Priority: spec.Priority, Handle: spec.Handle, ProgramID: spec.ProgramID}
+	return reconcile.AttachmentState{Link: spec.Link, Hook: string(spec.Hook), Program: spec.Program, Priority: spec.Priority, Handle: spec.Handle, ProgramID: spec.ProgramID, DirectAction: spec.DirectAction}
 }
 
 type dynamicRuntimePins struct{}

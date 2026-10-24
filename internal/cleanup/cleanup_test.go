@@ -41,14 +41,14 @@ func TestBuildPlanRequiresMatchingOwnershipEvidence(t *testing.T) {
 	state := reconcile.OwnershipState{
 		Programs:       map[string]reconcile.ProgramState{"tc_init_e": {ID: 10}},
 		Maps:           map[string]reconcile.MapState{"control_map": {ID: 20}},
-		Attachments:    []reconcile.AttachmentState{{Link: link, Hook: string(datapath.HookEgress), Program: "tc_init_e", Priority: datapath.FixedTCPriority, Handle: 0x100, ProgramID: 10}},
+		Attachments:    []reconcile.AttachmentState{{Link: link, Hook: string(datapath.HookEgress), Program: "tc_init_e", Priority: datapath.FixedTCPriority, Handle: 0x100, ProgramID: 10, DirectAction: true}},
 		FlannelRule:    reconcile.OwnedRule{Identity: "ONCACHE/oncache:dev", Fingerprint: "marker-fp"},
 		InstallationID: "install-a", NodeUID: "node-a", SchemaVersion: 1,
 	}
 	actual := reconcile.ActualState{
 		Programs:    map[string]reconcile.ProgramState{"tc_init_e": {ID: 10}},
 		Maps:        map[string]reconcile.MapState{"control_map": {ID: 20}},
-		Attachments: []reconcile.AttachmentState{{Link: link, Hook: string(datapath.HookEgress), Program: "tc_init_e", Priority: datapath.FixedTCPriority, Handle: 0x100, ProgramID: 10}},
+		Attachments: []reconcile.AttachmentState{{Link: link, Hook: string(datapath.HookEgress), Program: "tc_init_e", Priority: datapath.FixedTCPriority, Handle: 0x100, ProgramID: 10, DirectAction: true}},
 	}
 	plan := BuildPlan(state, actual, reconcile.RuleState{Present: true, Identity: "ONCACHE/oncache:dev", Fingerprint: "marker-fp"}, "ONCACHE/oncache:dev", nil)
 	if len(plan.Blocked) != 0 || len(plan.Actions) != 5 {
@@ -58,6 +58,21 @@ func TestBuildPlanRequiresMatchingOwnershipEvidence(t *testing.T) {
 	plan = BuildPlan(state, actual, reconcile.RuleState{Present: true, Identity: "ONCACHE/oncache:dev", Fingerprint: "marker-fp"}, "ONCACHE/oncache:dev", nil)
 	if len(plan.Blocked) == 0 {
 		t.Fatal("Map identity mismatch was not blocked")
+	}
+}
+
+func TestBuildPlanBlocksNonDirectActionFilter(t *testing.T) {
+	link := resolver.LinkIdentity{IfIndex: 7}
+	owned := reconcile.AttachmentState{Link: link, Hook: string(datapath.HookEgress), Program: "tc_init_e", Priority: datapath.FixedTCPriority, Handle: 0x100, ProgramID: 10, DirectAction: true}
+	actual := owned
+	actual.DirectAction = false
+	plan := BuildPlan(
+		reconcile.OwnershipState{SchemaVersion: 1, InstallationID: "install-a", NodeUID: "node-a", Programs: map[string]reconcile.ProgramState{"tc_init_e": {ID: 10}}, Attachments: []reconcile.AttachmentState{owned}},
+		reconcile.ActualState{Attachments: []reconcile.AttachmentState{actual}},
+		reconcile.RuleState{}, "", nil,
+	)
+	if len(plan.Actions) != 1 || plan.Actions[0].Kind != ActionState || len(plan.Blocked) != 1 || plan.Blocked[0].Kind != ActionTC {
+		t.Fatalf("non-direct-action filter was not blocked: %+v", plan)
 	}
 }
 

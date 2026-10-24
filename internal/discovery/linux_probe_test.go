@@ -125,7 +125,7 @@ func TestLinuxProbeAcceptsOwnedObjectsOnRestart(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "var/lib/oncache/v1"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(root, "var/lib/oncache/v1/state.json"), `{"schemaVersion":1,"installationID":"install-a","nodeUID":"node-1","elfBuildID":"sha256:test","bpfABI":1,"programs":{"tc_init_e":{"ID":10}},"maps":{"control_map":{"ID":20}},"attachments":[{"Program":"tc_init_e","Priority":1000,"Handle":256,"ProgramID":10}]}`)
+	writeFile(t, filepath.Join(root, "var/lib/oncache/v1/state.json"), `{"schemaVersion":1,"installationID":"install-a","nodeUID":"node-1","elfBuildID":"sha256:test","bpfABI":1,"programs":{"tc_init_e":{"ID":10}},"maps":{"control_map":{"ID":20}},"attachments":[{"Program":"tc_init_e","Priority":1000,"Handle":256,"ProgramID":10,"DirectAction":true}]}`)
 
 	snapshot, err := probe.Probe(context.Background(), request)
 	if err != nil {
@@ -166,7 +166,7 @@ func TestLinuxProbeRejectsForeignObjectAlongsideOwnedState(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "var/lib/oncache/v1"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(root, "var/lib/oncache/v1/state.json"), `{"schemaVersion":1,"installationID":"install-a","nodeUID":"node-1","elfBuildID":"sha256:test","bpfABI":1,"programs":{"tc_init_e":{"ID":10}},"maps":{"control_map":{"ID":20}},"attachments":[{"Program":"tc_init_e","Priority":1000,"Handle":256,"ProgramID":10}]}`)
+	writeFile(t, filepath.Join(root, "var/lib/oncache/v1/state.json"), `{"schemaVersion":1,"installationID":"install-a","nodeUID":"node-1","elfBuildID":"sha256:test","bpfABI":1,"programs":{"tc_init_e":{"ID":10}},"maps":{"control_map":{"ID":20}},"attachments":[{"Program":"tc_init_e","Priority":1000,"Handle":256,"ProgramID":10,"DirectAction":true}]}`)
 
 	snapshot, err := probe.Probe(context.Background(), request)
 	if err != nil {
@@ -237,7 +237,7 @@ func TestLinuxProbeRejectsMismatchedOwnershipEvidence(t *testing.T) {
 			if err := os.MkdirAll(filepath.Join(root, "var/lib/oncache/v1"), 0755); err != nil {
 				t.Fatal(err)
 			}
-			state := fmt.Sprintf(`{"schemaVersion":1,"installationID":%q,"nodeUID":%q,"elfBuildID":%q,"bpfABI":1,"programs":{"tc_init_e":{"ID":%d}},"maps":{"control_map":{"ID":%d}},"attachments":[{"Program":%q,"Priority":1000,"Handle":256,"ProgramID":%d}]}`,
+			state := fmt.Sprintf(`{"schemaVersion":1,"installationID":%q,"nodeUID":%q,"elfBuildID":%q,"bpfABI":1,"programs":{"tc_init_e":{"ID":%d}},"maps":{"control_map":{"ID":%d}},"attachments":[{"Program":%q,"Priority":1000,"Handle":256,"ProgramID":%d,"DirectAction":true}]}`,
 				test.stateInstallID, test.stateNodeUID, test.stateBuildID, test.programID, test.mapID, test.tcProgram, test.tcProgramID)
 			writeFile(t, filepath.Join(root, "var/lib/oncache/v1/state.json"), state)
 

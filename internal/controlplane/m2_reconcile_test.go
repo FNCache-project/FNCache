@@ -62,6 +62,11 @@ func TestM2OwnershipSurvivesPublisherRestart(t *testing.T) {
 		state.ABI != reconcile.BPFABIVersion || len(state.Programs) != 4 || len(state.Maps) != len(datapath.V1Schema().Maps) || len(state.Endpoints) != 1 {
 		t.Fatalf("ownership state did not survive restart: %+v", state)
 	}
+	for _, attachment := range state.Attachments {
+		if !attachment.DirectAction {
+			t.Fatalf("ownership state lost direct-action evidence: %+v", state.Attachments)
+		}
+	}
 }
 
 func TestM2ConflictPreventsCommitAndPublish(t *testing.T) {
@@ -80,7 +85,7 @@ func TestM2ConflictPreventsCommitAndPublish(t *testing.T) {
 func attachmentsFromFilters(filters []datapath.TCFilterState) []reconcile.AttachmentState {
 	attachments := make([]reconcile.AttachmentState, 0, len(filters))
 	for _, filter := range filters {
-		attachments = append(attachments, reconcile.AttachmentState{Link: filter.Link, Hook: string(filter.Hook), Program: filter.Program, Priority: filter.Priority, Handle: filter.Handle, ProgramID: filter.ProgramID})
+		attachments = append(attachments, reconcile.AttachmentState{Link: filter.Link, Hook: string(filter.Hook), Program: filter.Program, Priority: filter.Priority, Handle: filter.Handle, ProgramID: filter.ProgramID, DirectAction: filter.DirectAction})
 	}
 	return attachments
 }

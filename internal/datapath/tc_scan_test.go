@@ -31,7 +31,7 @@ func (b *scanTCBackend) RemoveFilter(context.Context, TCFilterSpec) error { retu
 func TestTCScannerCollectsAttachmentsAndConflicts(t *testing.T) {
 	link := resolver.LinkIdentity{IfIndex: 7, NetNSInode: 42}
 	backend := &scanTCBackend{filters: map[int][]TCFilterState{7: {
-		{Link: link, Hook: HookIngress, Program: "tc_masq", ProgramID: 10, Priority: FixedTCPriority, Handle: 0x200},
+		{Link: link, Hook: HookIngress, Program: "tc_masq", ProgramID: 10, Priority: FixedTCPriority, Handle: 0x200, DirectAction: true},
 		{Link: link, Hook: HookIngress, Priority: 2000, Handle: 9},
 	}}}
 	manager, err := NewTCManager(backend)
@@ -49,6 +49,22 @@ func TestTCScannerCollectsAttachmentsAndConflicts(t *testing.T) {
 	}
 	if actual.Conflicts[0].Identity != "7/42/ingress/2000/9" {
 		t.Fatalf("unexpected conflict identity: %+v", actual.Conflicts[0])
+	}
+}
+
+func TestTCScannerRejectsNonDirectActionFilter(t *testing.T) {
+	link := resolver.LinkIdentity{IfIndex: 7, NetNSInode: 42}
+	backend := &scanTCBackend{filters: map[int][]TCFilterState{7: {
+		{Link: link, Hook: HookIngress, Program: "tc_masq", ProgramID: 10, Priority: FixedTCPriority, Handle: 0x200},
+	}}}
+	manager, _ := NewTCManager(backend)
+	scanner, _ := NewTCScanner(manager)
+	actual, err := scanner.Scan(context.Background(), []resolver.LinkIdentity{link})
+	if err != nil || len(actual.Attachments) != 1 || actual.Attachments[0].DirectAction || len(actual.Conflicts) != 1 {
+		t.Fatalf("non-direct-action filter was not rejected: actual=%+v err=%v", actual, err)
+	}
+	if actual.Conflicts[0].Detail != "TC BPF filter is not direct-action" {
+		t.Fatalf("unexpected non-direct-action conflict: %+v", actual.Conflicts[0])
 	}
 }
 

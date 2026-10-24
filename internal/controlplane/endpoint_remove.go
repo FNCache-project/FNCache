@@ -37,6 +37,9 @@ func (r *EndpointRemover) RemoveOwnedAttachment(ctx context.Context, attachment 
 	if attachment.ProgramID == 0 {
 		return fmt.Errorf("owned attachment program ID is required")
 	}
+	if !attachment.DirectAction {
+		return reconcile.NewClassifiedError(reconcile.ErrorConflict, reconcile.ReasonTCForeignConflict, 0, fmt.Errorf("owned attachment is not direct-action"))
+	}
 	spec, err := datapath.NewFixedFilter(attachment.Link, attachment.Program, attachment.ProgramID, true)
 	if err != nil {
 		return err
@@ -113,7 +116,7 @@ func desiredClaimsEndpointLink(desired reconcile.DesiredState, actual reconcile.
 			continue
 		}
 		for _, attachment := range actual.Attachments {
-			if attachment.Program == program && attachment.ProgramID == programState.ID && attachment.Hook == string(identity.Hook) && attachment.Priority == identity.Priority && attachment.Handle == identity.Handle && sameLinkIdentity(attachment.Link, link) {
+			if attachment.Program == program && attachment.ProgramID == programState.ID && attachment.Hook == string(identity.Hook) && attachment.Priority == identity.Priority && attachment.Handle == identity.Handle && attachment.DirectAction == identity.DirectAction && sameLinkIdentity(attachment.Link, link) {
 				return true
 			}
 		}
@@ -132,7 +135,7 @@ func (r *EndpointRemover) removeFilter(ctx context.Context, actual reconcile.Act
 		if attachment.Link.IfIndex != ifindex || attachment.Link.NetNSInode != netnsInode || attachment.Hook != string(identity.Hook) || attachment.Priority != identity.Priority || attachment.Handle != identity.Handle {
 			continue
 		}
-		if found != nil || attachment.Program != program || attachment.ProgramID == 0 {
+		if found != nil || attachment.Program != program || attachment.ProgramID == 0 || !attachment.DirectAction {
 			return reconcile.NewClassifiedError(reconcile.ErrorConflict, reconcile.ReasonTCForeignConflict, 0, fmt.Errorf("endpoint filter identity conflict on %s/%d", program, ifindex))
 		}
 		found = &attachment

@@ -25,6 +25,7 @@ type attachmentIdentity struct {
 	priority  uint16
 	handle    uint32
 	programID uint32
+	direct    bool
 }
 
 func repairOwnedOrphans(ctx context.Context, state reconcile.OwnershipState, desired reconcile.DesiredState, actual reconcile.ActualState, attachmentTarget, markerTarget any) (bool, error) {
@@ -81,7 +82,7 @@ func expectedAttachments(desired reconcile.DesiredState, actual reconcile.Actual
 		if err != nil {
 			return
 		}
-		expected[attachmentKey(reconcile.AttachmentState{Link: spec.Link, Hook: string(spec.Hook), Program: spec.Program, Priority: spec.Priority, Handle: spec.Handle, ProgramID: spec.ProgramID})] = struct{}{}
+		expected[attachmentKey(reconcile.AttachmentState{Link: spec.Link, Hook: string(spec.Hook), Program: spec.Program, Priority: spec.Priority, Handle: spec.Handle, ProgramID: spec.ProgramID, DirectAction: spec.DirectAction})] = struct{}{}
 	}
 	add(desired.Flannel.UnderlayLink, "tc_init_e")
 	add(desired.Flannel.UnderlayLink, "tc_restore")
@@ -111,5 +112,5 @@ func hasExactAttachment(attachments []reconcile.AttachmentState, wanted reconcil
 }
 
 func attachmentKey(attachment reconcile.AttachmentState) attachmentIdentity {
-	return attachmentIdentity{netns: attachment.Link.NetNSInode, ifindex: attachment.Link.IfIndex, hook: attachment.Hook, program: attachment.Program, priority: attachment.Priority, handle: attachment.Handle, programID: attachment.ProgramID}
+	return attachmentIdentity{netns: attachment.Link.NetNSInode, ifindex: attachment.Link.IfIndex, hook: attachment.Hook, program: attachment.Program, priority: attachment.Priority, handle: attachment.Handle, programID: attachment.ProgramID, direct: attachment.DirectAction}
 }

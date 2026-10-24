@@ -35,8 +35,8 @@ func ownedEndpoint() reconcile.OwnedEndpoint {
 
 func endpointAttachments() []reconcile.AttachmentState {
 	return []reconcile.AttachmentState{
-		{Link: resolver.LinkIdentity{NetNSInode: 42, IfIndex: 7, NetNSPath: "/proc/1/ns/net"}, Hook: string(datapath.HookIngress), Program: "tc_init_in", Priority: datapath.FixedTCPriority, Handle: 0x201, ProgramID: 11},
-		{Link: resolver.LinkIdentity{IfIndex: 8}, Hook: string(datapath.HookIngress), Program: "tc_masq", Priority: datapath.FixedTCPriority, Handle: 0x200, ProgramID: 12},
+		{Link: resolver.LinkIdentity{NetNSInode: 42, IfIndex: 7, NetNSPath: "/proc/1/ns/net"}, Hook: string(datapath.HookIngress), Program: "tc_init_in", Priority: datapath.FixedTCPriority, Handle: 0x201, ProgramID: 11, DirectAction: true},
+		{Link: resolver.LinkIdentity{IfIndex: 8}, Hook: string(datapath.HookIngress), Program: "tc_masq", Priority: datapath.FixedTCPriority, Handle: 0x200, ProgramID: 12, DirectAction: true},
 	}
 }
 
@@ -72,6 +72,19 @@ func TestEndpointRemoverRejectsForeignFilter(t *testing.T) {
 	var classified *reconcile.ClassifiedError
 	if !errors.As(err, &classified) || classified.Class() != reconcile.ErrorConflict || len(tc.specs) != 0 {
 		t.Fatalf("foreign filter was not rejected: err=%v specs=%+v", err, tc.specs)
+	}
+}
+
+func TestEndpointRemoverRejectsNonDirectActionOwnedAttachment(t *testing.T) {
+	maps := &fakeEndpointMaps{}
+	tc := &fakeEndpointTC{}
+	remover, _ := NewEndpointRemover(maps, tc)
+	attachment := endpointAttachments()[0]
+	attachment.DirectAction = false
+	err := remover.RemoveOwnedAttachment(context.Background(), attachment)
+	var classified *reconcile.ClassifiedError
+	if !errors.As(err, &classified) || classified.Class() != reconcile.ErrorConflict || len(tc.specs) != 0 {
+		t.Fatalf("non-direct-action owned filter was not rejected: err=%v specs=%+v", err, tc.specs)
 	}
 }
 

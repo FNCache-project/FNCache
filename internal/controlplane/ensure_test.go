@@ -71,8 +71,8 @@ func TestBaseEnsurerReusesExistingAttachments(t *testing.T) {
 	actual := baseActualState()
 	link := baseDesiredState().Flannel.UnderlayLink
 	actual.Attachments = []reconcile.AttachmentState{
-		{Link: link, Hook: string(datapath.HookEgress), Program: "tc_init_e", ProgramID: 10, Priority: datapath.FixedTCPriority, Handle: 0x100},
-		{Link: link, Hook: string(datapath.HookIngress), Program: "tc_restore", ProgramID: 11, Priority: datapath.FixedTCPriority, Handle: 0x101},
+		{Link: link, Hook: string(datapath.HookEgress), Program: "tc_init_e", ProgramID: 10, Priority: datapath.FixedTCPriority, Handle: 0x100, DirectAction: true},
+		{Link: link, Hook: string(datapath.HookIngress), Program: "tc_restore", ProgramID: 11, Priority: datapath.FixedTCPriority, Handle: 0x101, DirectAction: true},
 	}
 	backend := &fakeBaseTCBackend{filters: []datapath.TCFilterState{
 		{Link: link, Hook: datapath.HookEgress, Program: "tc_init_e", ProgramID: 10, Priority: datapath.FixedTCPriority, Handle: 0x100, DirectAction: true},

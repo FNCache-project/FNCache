@@ -75,6 +75,15 @@ func TestVerifyStateRequiresCompleteVerifiedObjects(t *testing.T) {
 	}
 }
 
+func TestVerifyStateRejectsNonDirectActionAttachment(t *testing.T) {
+	desired := publishTestDesired()
+	actual := publishTestActual(desired)
+	actual.Attachments[0].DirectAction = false
+	if err := VerifyState(desired, actual); err == nil {
+		t.Fatal("non-direct-action attachment was accepted")
+	}
+}
+
 func TestVerifyStateRequiresVXLANConfig(t *testing.T) {
 	desired := publishTestDesired()
 	actual := publishTestActual(desired)
@@ -330,7 +339,7 @@ func publishTestActualWithSchema(desired reconcile.DesiredState, schema datapath
 		if err != nil {
 			panic(err)
 		}
-		actual.Attachments = append(actual.Attachments, reconcile.AttachmentState{Link: spec.Link, Hook: string(spec.Hook), Program: spec.Program, Priority: spec.Priority, Handle: spec.Handle, ProgramID: spec.ProgramID})
+		actual.Attachments = append(actual.Attachments, reconcile.AttachmentState{Link: spec.Link, Hook: string(spec.Hook), Program: spec.Program, Priority: spec.Priority, Handle: spec.Handle, ProgramID: spec.ProgramID, DirectAction: spec.DirectAction})
 	}
 	addPublishAttachment(desired.Flannel.UnderlayLink, "tc_init_e", 10)
 	addPublishAttachment(desired.Flannel.UnderlayLink, "tc_restore", 11)
