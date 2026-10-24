@@ -15,6 +15,7 @@ import (
 
 type remoteMaps struct {
 	calls          []string
+	remoteEntries  map[netip.Addr]netip.Addr
 	remoteMappings int
 	baseCalls      int
 	deviceMapCalls int
@@ -39,11 +40,20 @@ func (p *remoteTestControlPublisher) Publish(context.Context, uint64, uint64, ui
 
 func (m *remoteMaps) Clear(_ context.Context, name string) (int, error) {
 	m.calls = append(m.calls, name)
+	if name == "egressip_cache" {
+		m.remoteEntries = make(map[netip.Addr]netip.Addr)
+	}
 	return 2, m.err
 }
 
-func (m *remoteMaps) EnsureRemoteMappings(_ context.Context, _ reconcile.DesiredState, _ reconcile.ActualState, _ bool) (bool, error) {
+func (m *remoteMaps) EnsureRemoteMappings(_ context.Context, desired reconcile.DesiredState, _ reconcile.ActualState, _ bool) (bool, error) {
 	m.remoteMappings++
+	if m.remoteEntries == nil {
+		m.remoteEntries = make(map[netip.Addr]netip.Addr)
+	}
+	for podIP, mapping := range desired.RemoteEndpoints {
+		m.remoteEntries[podIP] = mapping.NodeIPv4
+	}
 	return true, m.err
 }
 
@@ -72,12 +82,12 @@ func remoteChangeStore(t *testing.T) *kube.SnapshotStore {
 	return store
 }
 
-func newRemoteChangeHandler(t *testing.T, store *kube.SnapshotStore, maps *remoteMaps, events *[]string, publisher *localHandlerPublisher) *RemoteChangeHandler {
+func newRemoteChangeHandler(t *testing.T, store *kube.SnapshotStore, maps *remoteMaps, events *[]string, publisher localPublisher) *RemoteChangeHandler {
 	t.Helper()
 	return newRemoteChangeHandlerWithDesired(t, store, maps, events, publisher, reconcile.DesiredState{Enabled: true, Capability: discovery.CapabilityReport{Supported: true}})
 }
 
-func newRemoteChangeHandlerWithDesired(t *testing.T, store *kube.SnapshotStore, maps *remoteMaps, events *[]string, publisher *localHandlerPublisher, base reconcile.DesiredState) *RemoteChangeHandler {
+func newRemoteChangeHandlerWithDesired(t *testing.T, store *kube.SnapshotStore, maps *remoteMaps, events *[]string, publisher localPublisher, base reconcile.DesiredState) *RemoteChangeHandler {
 	t.Helper()
 	control := &localHandlerControl{events: events}
 	scanner := &localHandlerScanner{events: events}
@@ -86,6 +96,21 @@ func newRemoteChangeHandlerWithDesired(t *testing.T, store *kube.SnapshotStore, 
 		t.Fatal(err)
 	}
 	return handler
+}
+
+type remoteMapPublisher struct {
+	desired                reconcile.DesiredState
+	events                 *[]string
+	maps                   *remoteMaps
+	remoteMappingAtPublish []bool
+}
+
+func (p *remoteMapPublisher) CommitAndPublish(_ context.Context, desired reconcile.DesiredState, _ reconcile.ActualState) error {
+	_, present := p.maps.remoteEntries[netip.MustParseAddr("10.42.1.2")]
+	p.remoteMappingAtPublish = append(p.remoteMappingAtPublish, present)
+	p.desired = desired
+	*p.events = append(*p.events, "publish")
+	return nil
 }
 
 func TestRemoteChangeHandlerRetriesWhenEndpointScanIsIncomplete(t *testing.T) {
@@ -145,13 +170,17 @@ func TestRemoteChangeHandlerInvalidatesAndPublishesLatestMapping(t *testing.T) {
 func TestRemoteChangeHandlerRemovesMappingAfterRemotePodTerminates(t *testing.T) {
 	events := []string{}
 	maps := &remoteMaps{}
-	publisher := &localHandlerPublisher{events: &events}
+	publisher := &remoteMapPublisher{events: &events, maps: maps}
 	store := remoteChangeStore(t)
 	handler := newRemoteChangeHandler(t, store, maps, &events, publisher)
 	key := reconcile.ReconcileKey{Kind: reconcile.ReconcileRemoteEndpoint, UID: "pod-remote"}
 
 	if err := handler.Handle(context.Background(), key); err != nil {
 		t.Fatal(err)
+	}
+	remoteIP := netip.MustParseAddr("10.42.1.2")
+	if nodeIP, ok := maps.remoteEntries[remoteIP]; !ok || nodeIP != netip.MustParseAddr("192.0.2.11") {
+		t.Fatalf("initial remote mapping was not ensured: %#v", maps.remoteEntries)
 	}
 	pod, ok := store.GetPod("pod-remote")
 	if !ok {
@@ -164,8 +193,14 @@ func TestRemoteChangeHandlerRemovesMappingAfterRemotePodTerminates(t *testing.T)
 	if err := handler.Handle(context.Background(), key); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := publisher.desired.RemoteEndpoints[netip.MustParseAddr("10.42.1.2")]; ok {
+	if _, ok := maps.remoteEntries[remoteIP]; ok {
+		t.Fatalf("terminal remote mapping was not cleared: %#v", maps.remoteEntries)
+	}
+	if _, ok := publisher.desired.RemoteEndpoints[remoteIP]; ok {
 		t.Fatalf("terminal remote mapping was retained: %#v", publisher.desired.RemoteEndpoints)
+	}
+	if len(publisher.remoteMappingAtPublish) != 2 || !publisher.remoteMappingAtPublish[0] || publisher.remoteMappingAtPublish[1] {
+		t.Fatalf("remote mapping cleanup did not precede publication: %#v", publisher.remoteMappingAtPublish)
 	}
 	if len(maps.calls) != 6 || maps.remoteMappings != 2 {
 		t.Fatalf("terminal remote mapping was not invalidated and rebuilt: clears=%v remote=%d", maps.calls, maps.remoteMappings)
