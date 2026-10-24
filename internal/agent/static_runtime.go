@@ -104,7 +104,22 @@ func (r *StaticRuntime) RunOnce(ctx context.Context) (reconcile.ReconcileResult,
 	if err != nil {
 		return reconcile.ReconcileResult{}, err
 	}
-	return coordinator.FullReconcile(ctx)
+	result, err := coordinator.FullReconcile(ctx)
+	if err != nil {
+		return result, err
+	}
+	return finalizeStaticRunOnce(ctx, r.control, result)
+}
+
+func finalizeStaticRunOnce(ctx context.Context, control localControl, result reconcile.ReconcileResult) (reconcile.ReconcileResult, error) {
+	if result.State != reconcile.AgentReady {
+		return result, nil
+	}
+	if err := control.Disable(ctx); err != nil {
+		return result, fmt.Errorf("disable static fast path: %w", err)
+	}
+	result.State = reconcile.AgentDisabled
+	return result, nil
 }
 
 func (r *StaticRuntime) Close() error {
