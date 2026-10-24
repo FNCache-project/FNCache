@@ -18,7 +18,7 @@ FNCache is an experimental Kubernetes node agent that uses an eBPF datapath to a
 
 ## Quickstart
 
-FNCache v0.5 targets Kubernetes or K3s clusters using Flannel VXLAN, containerd, IPv4 and amd64 nodes. The node kernel and cluster security policy must provide the BPF, BTF, TC and host-network capabilities required by the agent. Unsupported nodes remain on the normal Flannel path.
+FNCache v0.4.5 targets Kubernetes or K3s clusters using Flannel VXLAN, containerd, IPv4 and amd64 nodes. The node kernel and cluster security policy must provide the BPF, BTF, TC and host-network capabilities required by the agent. Unsupported nodes remain on the normal Flannel path.
 
 Install the latest published stable chart from GHCR:
 
@@ -35,7 +35,7 @@ For a reproducible deployment or rollback, pin the Chart version explicitly:
 ```bash
 helm upgrade --install fncache \
   oci://ghcr.io/fncache-project/charts/oncache \
-  --version 0.5.0 \
+  --version 0.4.5 \
   --namespace fncache-system \
   --create-namespace \
   --wait
