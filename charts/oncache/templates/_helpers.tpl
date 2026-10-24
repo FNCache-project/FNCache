@@ -19,9 +19,13 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 
 {{- define "oncache.validateHTTPPort" -}}
 {{- $address := required "config.server.listenAddress is required" .Values.config.server.listenAddress | toString -}}
-{{- $port := regexFind ":[0-9]+$" $address | trimPrefix ":" -}}
-{{- if eq $port "" -}}
-{{- fail (printf "config.server.listenAddress %q must end with a numeric port" $address) -}}
+{{- $port := "" -}}
+{{- if regexMatch "^\\[[^]]+\\]:[0-9]+$" $address -}}
+{{- $port = regexFind "[0-9]+$" $address -}}
+{{- else if regexMatch "^[^:]*:[0-9]+$" $address -}}
+{{- $port = regexFind "[0-9]+$" $address -}}
+{{- else -}}
+{{- fail (printf "config.server.listenAddress %q must be a host:port address; bracket IPv6 addresses" $address) -}}
 {{- end -}}
 {{- if ne (atoi $port) (int .Values.metrics.port) -}}
 {{- fail (printf "config.server.listenAddress port %s must match metrics.port %v" $port .Values.metrics.port) -}}

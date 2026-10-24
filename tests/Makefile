@@ -95,11 +95,20 @@ helm-test:
 	grep -Fq 'containerPort: 9191' "$$rendered"; \
 	grep -Fq '      port: 9191' "$$rendered"; \
 	grep -Fq 'targetPort: http' "$$rendered"; \
+	"$(HELM)" template oncache "$(CHART_DIR)" \
+		--set 'config.server.listenAddress=[::1]:9191' \
+		--set metrics.port=9191 >/dev/null; \
 	if "$(HELM)" template oncache "$(CHART_DIR)" \
 		--set config.server.listenAddress=:9191 \
 		--set metrics.port=9090 \
 		--set metrics.enabled=true >/dev/null 2>&1; then \
 		echo "expected mismatched HTTP ports to fail Helm rendering"; \
+		exit 1; \
+	fi; \
+	if "$(HELM)" template oncache "$(CHART_DIR)" \
+		--set config.server.listenAddress=::1 \
+		--set metrics.port=1 >/dev/null 2>&1; then \
+		echo "expected raw IPv6 listen address without a port to fail Helm rendering"; \
 		exit 1; \
 	fi
 
