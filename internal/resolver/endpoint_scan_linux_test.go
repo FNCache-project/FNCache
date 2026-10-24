@@ -62,6 +62,25 @@ func TestEndpointScannerIgnoresDeletingAndHostNetworkPods(t *testing.T) {
 	}
 }
 
+func TestEndpointScannerSkipsNonRunningPods(t *testing.T) {
+	pending := scanPod("pod-pending", "1")
+	pending.Phase = "Pending"
+	unknown := scanPod("pod-unknown", "1")
+	unknown.Phase = "Unknown"
+	fake := &fakeEndpointResolver{endpoints: map[string]Endpoint{}, errors: map[string]error{}}
+	scanner, _ := NewEndpointScanner(fake)
+
+	result, err := scanner.Scan(context.Background(), []PodSnapshot{pending, unknown})
+	if err != nil || len(result.Endpoints) != 0 || len(result.Skipped) != 2 || fake.calls != 0 {
+		t.Fatalf("non-running endpoint candidates were resolved: result=%+v err=%v calls=%d", result, err, fake.calls)
+	}
+	for _, uid := range []string{"pod-pending", "pod-unknown"} {
+		if !errors.Is(result.Skipped[uid], ErrEndpointNotReady) {
+			t.Fatalf("non-running Pod %s was not marked not ready: %#v", uid, result.Skipped)
+		}
+	}
+}
+
 func TestEndpointScannerSkipsRecoverableEndpointErrors(t *testing.T) {
 	resolver := &fakeEndpointResolver{endpoints: map[string]Endpoint{"pod-a": scanEndpoint("pod-a")}, errors: map[string]error{"pod-b": ErrEndpointNotReady, "pod-c": ErrStaleObject, "pod-d": ErrUnsupported}}
 	scanner, _ := NewEndpointScanner(resolver)

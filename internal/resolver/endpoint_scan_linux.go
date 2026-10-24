@@ -42,6 +42,10 @@ func (s *EndpointScanner) Scan(ctx context.Context, pods []PodSnapshot) (Endpoin
 		if pod.Deleting || pod.HostNetwork || pod.Phase == "Succeeded" || pod.Phase == "Failed" {
 			continue
 		}
+		if !IsEndpointPhaseReady(pod.Phase) {
+			result.Skipped[uid] = fmt.Errorf("%w: pod phase is %s", ErrEndpointNotReady, pod.Phase)
+			continue
+		}
 		endpoint, err := s.resolver.Resolve(ctx, pod)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
