@@ -11,7 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
 
-	"github.com/cat-cc-Lcos/FNCache/internal/kube"
+	"github.com/cat-cc-Lcos/FNCache/internal/kubernetes"
 )
 
 func bootstrapPod(ip string) *corev1.Pod {
@@ -41,8 +41,8 @@ func newBootstrap(t *testing.T, objects ...interface{}) *KubeBootstrap {
 			t.Fatalf("unsupported bootstrap fixture %T", object)
 		}
 	}
-	store := kube.NewSnapshotStore()
-	source, err := kube.NewInformerSource(client, store, 0)
+	store := kubernetes.NewSnapshotStore()
+	source, err := kubernetes.NewInformerSource(client, store, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,9 +54,9 @@ func newBootstrap(t *testing.T, objects ...interface{}) *KubeBootstrap {
 }
 
 func TestKubeBootstrapReachesReadyAfterSync(t *testing.T) {
-	store := kube.NewSnapshotStore()
+	store := kubernetes.NewSnapshotStore()
 	client := fake.NewSimpleClientset(bootstrapPod("10.42.0.2"), bootstrapNode())
-	source, err := kube.NewInformerSource(client, store, 0)
+	source, err := kubernetes.NewInformerSource(client, store, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

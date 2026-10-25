@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 )
 
 type fakeTCNetlinkAPI struct {
@@ -23,15 +23,15 @@ type fakeTCNetlinkAPI struct {
 	onListFilters                        func(*fakeTCNetlinkAPI)
 }
 
-func (f *fakeTCNetlinkAPI) listQdiscs(context.Context, resolver.LinkIdentity) ([]kernelQdisc, error) {
+func (f *fakeTCNetlinkAPI) listQdiscs(context.Context, endpoint.LinkIdentity) ([]kernelQdisc, error) {
 	return append([]kernelQdisc(nil), f.qdiscs...), nil
 }
-func (f *fakeTCNetlinkAPI) addQdisc(_ context.Context, _ resolver.LinkIdentity, qdisc kernelQdisc) error {
+func (f *fakeTCNetlinkAPI) addQdisc(_ context.Context, _ endpoint.LinkIdentity, qdisc kernelQdisc) error {
 	f.qdiscAdds++
 	f.qdiscs = append(f.qdiscs, qdisc)
 	return nil
 }
-func (f *fakeTCNetlinkAPI) listFilters(_ context.Context, _ resolver.LinkIdentity, parent uint32) ([]kernelFilter, error) {
+func (f *fakeTCNetlinkAPI) listFilters(_ context.Context, _ endpoint.LinkIdentity, parent uint32) ([]kernelFilter, error) {
 	result := make([]kernelFilter, 0)
 	for _, filter := range f.filters {
 		if filter.Parent == parent {
@@ -45,7 +45,7 @@ func (f *fakeTCNetlinkAPI) listFilters(_ context.Context, _ resolver.LinkIdentit
 	}
 	return result, nil
 }
-func (f *fakeTCNetlinkAPI) addFilter(_ context.Context, _ resolver.LinkIdentity, filter kernelFilter) error {
+func (f *fakeTCNetlinkAPI) addFilter(_ context.Context, _ endpoint.LinkIdentity, filter kernelFilter) error {
 	if f.addFailures > 0 {
 		f.addFailures--
 		return f.addErr
@@ -53,7 +53,7 @@ func (f *fakeTCNetlinkAPI) addFilter(_ context.Context, _ resolver.LinkIdentity,
 	f.filters = append(f.filters, filter)
 	return nil
 }
-func (f *fakeTCNetlinkAPI) deleteFilter(_ context.Context, _ resolver.LinkIdentity, filter kernelFilter) error {
+func (f *fakeTCNetlinkAPI) deleteFilter(_ context.Context, _ endpoint.LinkIdentity, filter kernelFilter) error {
 	f.filterDeletes++
 	for i, current := range f.filters {
 		if current.Parent == filter.Parent && current.Priority == filter.Priority && current.Handle == filter.Handle {
@@ -92,7 +92,7 @@ func (l *fakeTCProgramLoader) Load(path string) (tcProgram, error) {
 	return l.program, nil
 }
 
-func linuxTestLink() resolver.LinkIdentity { return resolver.LinkIdentity{IfIndex: 4, NetNSInode: 9} }
+func linuxTestLink() endpoint.LinkIdentity { return endpoint.LinkIdentity{IfIndex: 4, NetNSInode: 9} }
 
 func TestLinuxTCBackendCreatesAndReusesClsact(t *testing.T) {
 	api := &fakeTCNetlinkAPI{}
@@ -116,7 +116,7 @@ func TestLinuxTCBackendRejectsTargetNamespaceWithoutPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = backend.EnsureClsact(context.Background(), resolver.LinkIdentity{NetNSInode: 9, IfIndex: 4})
+	_, err = backend.EnsureClsact(context.Background(), endpoint.LinkIdentity{NetNSInode: 9, IfIndex: 4})
 	if err == nil {
 		t.Fatal("target namespace without a path was accepted")
 	}
@@ -213,7 +213,7 @@ func TestLinuxTCBackendRestoresLegacyFilterWhenMigrationAttachFails(t *testing.T
 	}
 }
 
-func apiFilterState(link resolver.LinkIdentity, program string, id uint32) TCFilterState {
+func apiFilterState(link endpoint.LinkIdentity, program string, id uint32) TCFilterState {
 	return TCFilterState{Link: link, Hook: HookEgress, Program: program, ProgramID: id, Priority: FixedTCPriority, Handle: 0x100, DirectAction: true}
 }
 

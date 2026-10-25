@@ -9,10 +9,10 @@ import (
 
 	"github.com/cat-cc-Lcos/FNCache/internal/controlplane"
 	"github.com/cat-cc-Lcos/FNCache/internal/datapath"
-	"github.com/cat-cc-Lcos/FNCache/internal/overlay/flannel"
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
+	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/flannel"
 	"github.com/cat-cc-Lcos/FNCache/internal/ownership"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 )
 
 const (
@@ -150,7 +150,7 @@ func Run(ctx context.Context, options Options, dryRun bool) (Plan, error) {
 	unresolved := make([]reconcile.AttachmentState, 0)
 	scanState := state
 	scanState.Attachments = append([]reconcile.AttachmentState(nil), state.Attachments...)
-	links := make([]resolver.LinkIdentity, 0)
+	links := make([]endpoint.LinkIdentity, 0)
 	seen := make(map[string]struct{})
 	for index, attachment := range scanState.Attachments {
 		if attachment.Link.NetNSInode != 0 {

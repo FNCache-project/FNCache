@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/cat-cc-Lcos/FNCache/internal/datapath"
-	"github.com/cat-cc-Lcos/FNCache/internal/discovery"
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
+	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/discovery"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 )
 
 type fakeOwnershipCommitter struct {
@@ -182,7 +182,7 @@ func TestPublisherRechecksPublishGuardBeforeControlPublish(t *testing.T) {
 
 func TestPublisherRejectsIncompleteEndpointScanBeforeCommit(t *testing.T) {
 	desired := publishTestDesired()
-	desired.EndpointScanSkipped = map[string]string{"pod-skipped": resolver.ErrEndpointNotReady.Error()}
+	desired.EndpointScanSkipped = map[string]string{"pod-skipped": endpoint.ErrEndpointNotReady.Error()}
 	actual := publishTestActual(desired)
 	events := []string{}
 	store := &fakeOwnershipCommitter{events: &events}
@@ -205,7 +205,7 @@ func TestPublisherRejectsIncompleteEndpointScanBeforeCommit(t *testing.T) {
 func TestPublisherRejectsIncompleteActualScanBeforeCommit(t *testing.T) {
 	desired := publishTestDesired()
 	actual := publishTestActual(desired)
-	actual.EndpointScanSkipped = map[string]string{"pod-skipped": resolver.ErrEndpointNotReady.Error()}
+	actual.EndpointScanSkipped = map[string]string{"pod-skipped": endpoint.ErrEndpointNotReady.Error()}
 	events := []string{}
 	store := &fakeOwnershipCommitter{events: &events}
 	control := &fakeControlPublisher{events: &events}
@@ -309,16 +309,16 @@ func publishTestConfig() PublishConfig {
 }
 
 func publishTestDesired() reconcile.DesiredState {
-	endpoint := resolver.Endpoint{
-		Pod: resolver.PodIdentity{Namespace: "default", Name: "web", UID: "pod-a"}, Node: resolver.NodeIdentity{Name: "node-a"},
+	resolvedEndpoint := endpoint.Endpoint{
+		Pod: endpoint.PodIdentity{Namespace: "default", Name: "web", UID: "pod-a"}, Node: endpoint.NodeIdentity{Name: "node-a"},
 		PodIPv4: netip.MustParseAddr("10.244.1.10"), NetNSInode: 42,
-		PeerLink: resolver.LinkIdentity{NetNSInode: 42, IfIndex: 10, IfName: "eth0", MAC: []byte{2, 0, 0, 0, 0, 2}},
-		HostLink: resolver.LinkIdentity{IfIndex: 20, IfName: "vethweb", MAC: []byte{2, 0, 0, 0, 0, 3}},
+		PeerLink: endpoint.LinkIdentity{NetNSInode: 42, IfIndex: 10, IfName: "eth0", MAC: []byte{2, 0, 0, 0, 0, 2}},
+		HostLink: endpoint.LinkIdentity{IfIndex: 20, IfName: "vethweb", MAC: []byte{2, 0, 0, 0, 0, 3}},
 	}
 	return reconcile.DesiredState{
-		Generation: 7, Enabled: true, LocalEndpoints: map[string]resolver.Endpoint{endpoint.Pod.UID: endpoint},
+		Generation: 7, Enabled: true, LocalEndpoints: map[string]endpoint.Endpoint{resolvedEndpoint.Pod.UID: resolvedEndpoint},
 		Datapath: reconcile.DatapathSpec{VXLANVNI: 1, VXLANUDPPort: 8472},
-		Flannel:  reconcile.FlannelState{UnderlayLink: resolver.LinkIdentity{IfIndex: 2, IfName: "eth0", MAC: []byte{2, 0, 0, 0, 0, 1}}, UnderlayIPv4: netip.MustParseAddr("192.0.2.10")},
+		Flannel:  reconcile.FlannelState{UnderlayLink: endpoint.LinkIdentity{IfIndex: 2, IfName: "eth0", MAC: []byte{2, 0, 0, 0, 0, 1}}, UnderlayIPv4: netip.MustParseAddr("192.0.2.10")},
 	}
 }
 
@@ -334,7 +334,7 @@ func publishTestActualWithSchema(desired reconcile.DesiredState, schema datapath
 	for _, expected := range schema.Maps {
 		actual.Maps[expected.Name] = reconcile.MapState{ID: 1, Name: expected.Name, KeySize: expected.KeySize, ValueSize: expected.ValueSize, MaxEntries: expected.MaxEntries}
 	}
-	addPublishAttachment := func(link resolver.LinkIdentity, program string, id uint32) {
+	addPublishAttachment := func(link endpoint.LinkIdentity, program string, id uint32) {
 		spec, err := datapath.NewFixedFilter(link, program, id, true)
 		if err != nil {
 			panic(err)
@@ -343,8 +343,8 @@ func publishTestActualWithSchema(desired reconcile.DesiredState, schema datapath
 	}
 	addPublishAttachment(desired.Flannel.UnderlayLink, "tc_init_e", 10)
 	addPublishAttachment(desired.Flannel.UnderlayLink, "tc_restore", 11)
-	endpoint := desired.LocalEndpoints["pod-a"]
-	addPublishAttachment(endpoint.PeerLink, "tc_init_in", 12)
-	addPublishAttachment(endpoint.HostLink, "tc_masq", 13)
+	resolvedEndpoint := desired.LocalEndpoints["pod-a"]
+	addPublishAttachment(resolvedEndpoint.PeerLink, "tc_init_in", 12)
+	addPublishAttachment(resolvedEndpoint.HostLink, "tc_masq", 13)
 	return actual
 }

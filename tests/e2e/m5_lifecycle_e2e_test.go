@@ -44,7 +44,7 @@ func TestM5LifecycleE2E(t *testing.T) {
 	repository, tag := splitImage(image)
 	if _, err := run("helm", "upgrade", "--install", "oncache-m5-lifecycle", chart, "--namespace", "kube-system",
 		"--set", "image.repository="+repository, "--set", "image.tag="+tag,
-		"--set", "agent.installationID=m5-lifecycle", "--set", "config.kube.resyncInterval="+resyncInterval); err != nil {
+		"--set", "agent.installationID=m5-lifecycle", "--set", "config.kubernetes.resyncInterval="+resyncInterval); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := run("kubectl", "-n", "kube-system", "rollout", "status", "daemonset/oncache-m5-lifecycle-oncache", "--timeout=180s"); err != nil {

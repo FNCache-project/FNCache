@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/cat-cc-Lcos/FNCache/internal/kube"
+	"github.com/cat-cc-Lcos/FNCache/internal/kubernetes"
 )
 
 type KubeBootstrapState string
@@ -18,15 +18,15 @@ const (
 
 // KubeBootstrap gates Snapshot reads until both Kubernetes informers sync.
 type KubeBootstrap struct {
-	source *kube.InformerSource
-	store  *kube.SnapshotStore
+	source *kubernetes.InformerSource
+	store  *kubernetes.SnapshotStore
 
 	mu      sync.RWMutex
 	state   KubeBootstrapState
 	started bool
 }
 
-func NewKubeBootstrap(source *kube.InformerSource, store *kube.SnapshotStore) (*KubeBootstrap, error) {
+func NewKubeBootstrap(source *kubernetes.InformerSource, store *kubernetes.SnapshotStore) (*KubeBootstrap, error) {
 	if source == nil || store == nil {
 		return nil, fmt.Errorf("informer source and snapshot store are required")
 	}
@@ -60,9 +60,9 @@ func (b *KubeBootstrap) State() KubeBootstrapState {
 	return b.state
 }
 
-func (b *KubeBootstrap) Snapshot() (kube.Snapshot, error) {
+func (b *KubeBootstrap) Snapshot() (kubernetes.Snapshot, error) {
 	if b.State() != KubeBootstrapReady {
-		return kube.Snapshot{}, fmt.Errorf("kubernetes snapshot is not ready: %s", b.State())
+		return kubernetes.Snapshot{}, fmt.Errorf("kubernetes snapshot is not ready: %s", b.State())
 	}
 	return b.store.Snapshot(), nil
 }

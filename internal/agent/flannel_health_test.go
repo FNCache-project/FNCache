@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cat-cc-Lcos/FNCache/internal/overlay/flannel"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
+	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/flannel"
 )
 
 type fakeFlannelHealthSource struct {
@@ -22,8 +22,8 @@ func (s *fakeFlannelHealthSource) Discover(context.Context, flannel.DiscoveryReq
 
 func healthFlannelConfig(fingerprint string) flannel.FlannelConfig {
 	return flannel.FlannelConfig{
-		BackendType: "vxlan", VXLANLink: resolver.LinkIdentity{IfIndex: 9, IfName: "flannel.1"},
-		UnderlayLink: resolver.LinkIdentity{IfIndex: 2, IfName: "eth0"}, UnderlayIPv4: netip.MustParseAddr("192.0.2.10"),
+		BackendType: "vxlan", VXLANLink: endpoint.LinkIdentity{IfIndex: 9, IfName: "flannel.1"},
+		UnderlayLink: endpoint.LinkIdentity{IfIndex: 2, IfName: "eth0"}, UnderlayIPv4: netip.MustParseAddr("192.0.2.10"),
 		PodCIDR: netip.MustParsePrefix("10.42.0.0/24"), VNI: 1, UDPPort: 8472, MTU: 1450,
 		MissMask: 0x04, EstablishedMask: 0x08, IPTablesBackend: "iptables-nft", Fingerprint: fingerprint,
 	}

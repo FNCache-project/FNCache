@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 )
 
 type TCHook string
@@ -17,7 +17,7 @@ const (
 )
 
 type TCFilterSpec struct {
-	Link         resolver.LinkIdentity
+	Link         endpoint.LinkIdentity
 	Hook         TCHook
 	Program      string
 	ProgramID    uint32
@@ -27,7 +27,7 @@ type TCFilterSpec struct {
 }
 
 type TCFilterState struct {
-	Link         resolver.LinkIdentity
+	Link         endpoint.LinkIdentity
 	Hook         TCHook
 	Program      string
 	ProgramID    uint32
@@ -37,14 +37,14 @@ type TCFilterState struct {
 }
 
 type TCQdiscState struct {
-	Link             resolver.LinkIdentity
+	Link             endpoint.LinkIdentity
 	Exists           bool
 	CreatedByOncache bool
 }
 
 type TCBackend interface {
-	EnsureClsact(context.Context, resolver.LinkIdentity) (TCQdiscState, error)
-	ListFilters(context.Context, resolver.LinkIdentity) ([]TCFilterState, error)
+	EnsureClsact(context.Context, endpoint.LinkIdentity) (TCQdiscState, error)
+	ListFilters(context.Context, endpoint.LinkIdentity) ([]TCFilterState, error)
 	AttachFilter(context.Context, TCFilterSpec) (TCFilterState, error)
 	RemoveFilter(context.Context, TCFilterSpec) error
 }
@@ -94,7 +94,7 @@ func NewTCManagerWithNetNS(backend TCBackend, netns *NetNSManager) (*TCManager, 
 	return &TCManager{backend: backend, netns: netns}, nil
 }
 
-func NewFixedFilter(link resolver.LinkIdentity, program string, programID uint32, directAction bool) (TCFilterSpec, error) {
+func NewFixedFilter(link endpoint.LinkIdentity, program string, programID uint32, directAction bool) (TCFilterSpec, error) {
 	fixed, ok := fixedAttachments[program]
 	if !ok {
 		return TCFilterSpec{}, fmt.Errorf("unsupported ONCache TC program: %s", program)
@@ -114,7 +114,7 @@ func NewFixedFilter(link resolver.LinkIdentity, program string, programID uint32
 	return spec, nil
 }
 
-func (m *TCManager) EnsureClsact(ctx context.Context, link resolver.LinkIdentity) (TCQdiscState, error) {
+func (m *TCManager) EnsureClsact(ctx context.Context, link endpoint.LinkIdentity) (TCQdiscState, error) {
 	if err := validateLink(link); err != nil {
 		return TCQdiscState{}, err
 	}
@@ -215,7 +215,7 @@ func (m *TCManager) RemoveFilter(ctx context.Context, spec TCFilterSpec) error {
 	})
 }
 
-func (m *TCManager) ListFilters(ctx context.Context, link resolver.LinkIdentity) ([]TCFilterState, error) {
+func (m *TCManager) ListFilters(ctx context.Context, link endpoint.LinkIdentity) ([]TCFilterState, error) {
 	if err := validateLink(link); err != nil {
 		return nil, err
 	}
@@ -231,7 +231,7 @@ func (m *TCManager) ListFilters(ctx context.Context, link resolver.LinkIdentity)
 	return result, err
 }
 
-func (m *TCManager) withLinkNetNS(ctx context.Context, link resolver.LinkIdentity, fn func(context.Context) error) error {
+func (m *TCManager) withLinkNetNS(ctx context.Context, link endpoint.LinkIdentity, fn func(context.Context) error) error {
 	if m.netns == nil || link.NetNSInode == 0 {
 		return fn(ctx)
 	}
@@ -258,7 +258,7 @@ func validateFilterSpec(spec TCFilterSpec) error {
 	return nil
 }
 
-func validateLink(link resolver.LinkIdentity) error {
+func validateLink(link endpoint.LinkIdentity) error {
 	if link.IfIndex <= 0 {
 		return fmt.Errorf("TC link ifindex is required")
 	}
@@ -276,7 +276,7 @@ func isFixedAttachment(filter TCFilterState) bool {
 	return ok && fixed.hook == filter.Hook && fixed.handle == filter.Handle
 }
 
-func sameLink(current, expected resolver.LinkIdentity) bool {
+func sameLink(current, expected endpoint.LinkIdentity) bool {
 	return current.NetNSInode == expected.NetNSInode && current.IfIndex == expected.IfIndex
 }
 

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 )
 
 func TestStoreCommitLoadRoundTrip(t *testing.T) {
@@ -42,7 +42,7 @@ func TestStoreDoesNotPersistNetNSPath(t *testing.T) {
 	store, path := testStore(t)
 	state := testState()
 	state.Attachments = []reconcile.AttachmentState{{
-		Link: resolver.LinkIdentity{NetNSInode: 42, NetNSPath: "/proc/123/ns/net", IfIndex: 10, IfName: "eth0"}, DirectAction: true,
+		Link: endpoint.LinkIdentity{NetNSInode: 42, NetNSPath: "/proc/123/ns/net", IfIndex: 10, IfName: "eth0"}, DirectAction: true,
 	}}
 	if err := store.Commit(context.Background(), state); err != nil {
 		t.Fatal(err)

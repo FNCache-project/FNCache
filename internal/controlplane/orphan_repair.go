@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"github.com/cat-cc-Lcos/FNCache/internal/datapath"
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 )
 
 type ownedAttachmentRemover interface {
@@ -73,7 +73,7 @@ func repairOwnedOrphans(ctx context.Context, state reconcile.OwnershipState, des
 
 func expectedAttachments(desired reconcile.DesiredState, actual reconcile.ActualState) map[attachmentIdentity]struct{} {
 	expected := make(map[attachmentIdentity]struct{})
-	add := func(link resolver.LinkIdentity, program string) {
+	add := func(link endpoint.LinkIdentity, program string) {
 		state, ok := actual.Programs[program]
 		if !ok || state.ID == 0 {
 			return

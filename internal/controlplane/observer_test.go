@@ -7,10 +7,10 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/cat-cc-Lcos/FNCache/internal/discovery"
-	"github.com/cat-cc-Lcos/FNCache/internal/overlay/flannel"
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
+	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/discovery"
+	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/flannel"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 )
 
 type fakePreflight struct {
@@ -38,12 +38,12 @@ func (f *fakeFlannel) Discover(context.Context, flannel.DiscoveryRequest) (flann
 }
 
 type fakeEndpoints struct {
-	result resolver.EndpointScanResult
+	result endpoint.EndpointScanResult
 	err    error
-	pods   []resolver.PodSnapshot
+	pods   []endpoint.PodSnapshot
 }
 
-func (f *fakeEndpoints) Scan(_ context.Context, pods []resolver.PodSnapshot) (resolver.EndpointScanResult, error) {
+func (f *fakeEndpoints) Scan(_ context.Context, pods []endpoint.PodSnapshot) (endpoint.EndpointScanResult, error) {
 	f.pods = pods
 	return f.result, f.err
 }
@@ -58,10 +58,10 @@ func (f *fakePins) Scan(context.Context) (reconcile.ActualState, error) { return
 type fakeTC struct {
 	actual reconcile.ActualState
 	err    error
-	links  []resolver.LinkIdentity
+	links  []endpoint.LinkIdentity
 }
 
-func (f *fakeTC) Scan(_ context.Context, links []resolver.LinkIdentity) (reconcile.ActualState, error) {
+func (f *fakeTC) Scan(_ context.Context, links []endpoint.LinkIdentity) (reconcile.ActualState, error) {
 	f.links = links
 	return f.actual, f.err
 }
@@ -78,10 +78,10 @@ func (f *fakeRules) Scan(context.Context, flannel.MarkerRuleSpec) (reconcile.Rul
 func TestObserverDiscoverBuildsDesiredState(t *testing.T) {
 	preflight := &fakePreflight{report: discovery.CapabilityReport{Supported: true}}
 	flannelSource := &fakeFlannel{config: testFlannelConfig()}
-	endpoint := testEndpoint()
-	endpoints := &fakeEndpoints{result: resolver.EndpointScanResult{
-		Endpoints: map[string]resolver.Endpoint{endpoint.Pod.UID: endpoint},
-		Skipped:   map[string]error{"pod-pending": resolver.ErrEndpointNotReady, "pod-unsupported": resolver.ErrUnsupported},
+	readyEndpoint := testEndpoint()
+	endpoints := &fakeEndpoints{result: endpoint.EndpointScanResult{
+		Endpoints: map[string]endpoint.Endpoint{readyEndpoint.Pod.UID: readyEndpoint},
+		Skipped:   map[string]error{"pod-pending": endpoint.ErrEndpointNotReady, "pod-unsupported": endpoint.ErrUnsupported},
 	}}
 	input := testInput()
 	input.MarkerRule = flannel.MarkerRuleSpec{Chain: "FNCACHE", Comment: "fncache:custom"}
@@ -97,13 +97,13 @@ func TestObserverDiscoverBuildsDesiredState(t *testing.T) {
 		desired.Datapath.VXLANVNI != 1 || desired.Flannel.Fingerprint != "flannel-fp" {
 		t.Fatalf("unexpected desired state: %+v", desired)
 	}
-	if _, ok := desired.LocalEndpoints[endpoint.Pod.UID]; !ok {
+	if _, ok := desired.LocalEndpoints[readyEndpoint.Pod.UID]; !ok {
 		t.Fatalf("ready endpoint missing: %+v", desired.LocalEndpoints)
 	}
 	if _, ok := desired.LocalEndpoints["pod-pending"]; ok {
 		t.Fatalf("skipped endpoint was included: %+v", desired.LocalEndpoints)
 	}
-	if reason := desired.EndpointScanSkipped["pod-pending"]; reason != resolver.ErrEndpointNotReady.Error() {
+	if reason := desired.EndpointScanSkipped["pod-pending"]; reason != endpoint.ErrEndpointNotReady.Error() {
 		t.Fatalf("skipped endpoint was not propagated: got=%q", reason)
 	}
 	if _, ok := desired.EndpointScanSkipped["pod-unsupported"]; ok {
@@ -155,7 +155,7 @@ func TestObserverScanMergesReadSideState(t *testing.T) {
 func TestObserverScanPropagatesEndpointScanSkipped(t *testing.T) {
 	sources := testSources(&fakePreflight{report: discovery.CapabilityReport{Supported: true}}, &fakeFlannel{config: testFlannelConfig()}, &fakeEndpoints{})
 	input := testInput()
-	input.EndpointScanSkipped = map[string]error{"pod-a": resolver.ErrEndpointNotReady, "pod-unsupported": resolver.ErrUnsupported}
+	input.EndpointScanSkipped = map[string]error{"pod-a": endpoint.ErrEndpointNotReady, "pod-unsupported": endpoint.ErrUnsupported}
 	observer, err := NewObserver(sources, input)
 	if err != nil {
 		t.Fatal(err)
@@ -164,7 +164,7 @@ func TestObserverScanPropagatesEndpointScanSkipped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reason := actual.EndpointScanSkipped["pod-a"]; reason != resolver.ErrEndpointNotReady.Error() {
+	if reason := actual.EndpointScanSkipped["pod-a"]; reason != endpoint.ErrEndpointNotReady.Error() {
 		t.Fatalf("endpoint scan skip was not propagated to actual state: got=%q", reason)
 	}
 	if _, ok := actual.EndpointScanSkipped["pod-unsupported"]; ok {
@@ -173,21 +173,21 @@ func TestObserverScanPropagatesEndpointScanSkipped(t *testing.T) {
 }
 
 func TestObserverRefreshesTCLinksAfterEndpointRediscovery(t *testing.T) {
-	endpoint := testEndpoint()
-	base := resolver.LinkIdentity{IfIndex: 2, IfName: "eth0"}
-	oldPeer := resolver.LinkIdentity{NetNSInode: 42, IfIndex: 11, IfName: "eth0"}
-	oldHost := resolver.LinkIdentity{IfIndex: 21, IfName: "veth-old"}
+	readyEndpoint := testEndpoint()
+	base := endpoint.LinkIdentity{IfIndex: 2, IfName: "eth0"}
+	oldPeer := endpoint.LinkIdentity{NetNSInode: 42, IfIndex: 11, IfName: "eth0"}
+	oldHost := endpoint.LinkIdentity{IfIndex: 21, IfName: "veth-old"}
 	pins := &fakePins{}
 	tc := &fakeTC{}
 	rules := &fakeRules{}
-	endpoints := &fakeEndpoints{result: resolver.EndpointScanResult{
-		Endpoints: map[string]resolver.Endpoint{endpoint.Pod.UID: endpoint},
+	endpoints := &fakeEndpoints{result: endpoint.EndpointScanResult{
+		Endpoints: map[string]endpoint.Endpoint{readyEndpoint.Pod.UID: readyEndpoint},
 	}}
 	sources := testSources(&fakePreflight{report: discovery.CapabilityReport{Supported: true}}, &fakeFlannel{config: testFlannelConfig()}, endpoints)
 	sources.Pins, sources.TC, sources.Rules = pins, tc, rules
 	input := testInput()
-	input.TCLinks = []resolver.LinkIdentity{base, oldPeer, oldHost}
-	input.BaseTCLinks = []resolver.LinkIdentity{base}
+	input.TCLinks = []endpoint.LinkIdentity{base, oldPeer, oldHost}
+	input.BaseTCLinks = []endpoint.LinkIdentity{base}
 	observer, err := NewObserver(sources, input)
 	if err != nil {
 		t.Fatal(err)
@@ -198,7 +198,7 @@ func TestObserverRefreshesTCLinksAfterEndpointRediscovery(t *testing.T) {
 	if _, err := observer.Scan(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	want := []resolver.LinkIdentity{base, endpoint.PeerLink, endpoint.HostLink}
+	want := []endpoint.LinkIdentity{base, readyEndpoint.PeerLink, readyEndpoint.HostLink}
 	if !reflect.DeepEqual(tc.links, want) {
 		t.Fatalf("observer retained stale endpoint links: got=%+v want=%+v", tc.links, want)
 	}
@@ -221,18 +221,18 @@ func testSources(preflight *fakePreflight, flannelSource *fakeFlannel, endpoints
 func testInput() ObservationInput {
 	return ObservationInput{
 		Generation:       7,
-		PreflightRequest: discovery.PreflightRequest{Node: resolver.NodeIdentity{Name: "node-a"}, PinRoot: "/sys/fs/bpf/oncache/v1", StateDir: "/var/lib/oncache/v1", RuntimeURI: "unix:///run/containerd/containerd.sock", Overlay: "flannel-vxlan"},
+		PreflightRequest: discovery.PreflightRequest{Node: endpoint.NodeIdentity{Name: "node-a"}, PinRoot: "/sys/fs/bpf/oncache/v1", StateDir: "/var/lib/oncache/v1", RuntimeURI: "unix:///run/containerd/containerd.sock", Overlay: "flannel-vxlan"},
 		FlannelRequest:   flannel.DiscoveryRequest{VXLANLinkName: "flannel.1", UnderlayDevice: "eth0", MissMask: 0x04, EstablishedMask: 0x08, IPTablesBackend: "iptables-nft"},
 		MarkerRule:       flannel.MarkerRuleSpec{Chain: "ONCACHE", Comment: "oncache:install-a"},
-		Pods:             []resolver.PodSnapshot{{Identity: resolver.PodIdentity{Namespace: "default", Name: "web", UID: "pod-a"}, NodeName: "node-a", PodIPv4: netip.MustParseAddr("10.244.1.10"), Phase: "Running"}},
-		TCLinks:          []resolver.LinkIdentity{{IfIndex: 2, IfName: "eth0"}},
+		Pods:             []endpoint.PodSnapshot{{Identity: endpoint.PodIdentity{Namespace: "default", Name: "web", UID: "pod-a"}, NodeName: "node-a", PodIPv4: netip.MustParseAddr("10.244.1.10"), Phase: "Running"}},
+		TCLinks:          []endpoint.LinkIdentity{{IfIndex: 2, IfName: "eth0"}},
 	}
 }
 
 func testFlannelConfig() flannel.FlannelConfig {
-	return flannel.FlannelConfig{BackendType: "vxlan", VXLANLink: resolver.LinkIdentity{IfIndex: 8, IfName: "flannel.1"}, UnderlayLink: resolver.LinkIdentity{IfIndex: 2, IfName: "eth0"}, UnderlayIPv4: netip.MustParseAddr("192.0.2.10"), PodCIDR: netip.MustParsePrefix("10.244.2.0/24"), VNI: 1, UDPPort: 8472, MTU: 1450, MissMask: 0x04, EstablishedMask: 0x08, IPTablesBackend: "iptables-nft", Fingerprint: "flannel-fp"}
+	return flannel.FlannelConfig{BackendType: "vxlan", VXLANLink: endpoint.LinkIdentity{IfIndex: 8, IfName: "flannel.1"}, UnderlayLink: endpoint.LinkIdentity{IfIndex: 2, IfName: "eth0"}, UnderlayIPv4: netip.MustParseAddr("192.0.2.10"), PodCIDR: netip.MustParsePrefix("10.244.2.0/24"), VNI: 1, UDPPort: 8472, MTU: 1450, MissMask: 0x04, EstablishedMask: 0x08, IPTablesBackend: "iptables-nft", Fingerprint: "flannel-fp"}
 }
 
-func testEndpoint() resolver.Endpoint {
-	return resolver.Endpoint{Pod: resolver.PodIdentity{Namespace: "default", Name: "web", UID: "pod-a"}, Node: resolver.NodeIdentity{Name: "node-a"}, PodIPv4: netip.MustParseAddr("10.244.1.10"), NetNSInode: 42, PeerLink: resolver.LinkIdentity{NetNSInode: 42, IfIndex: 10, IfName: "eth0"}, HostLink: resolver.LinkIdentity{IfIndex: 20, IfName: "vethweb"}}
+func testEndpoint() endpoint.Endpoint {
+	return endpoint.Endpoint{Pod: endpoint.PodIdentity{Namespace: "default", Name: "web", UID: "pod-a"}, Node: endpoint.NodeIdentity{Name: "node-a"}, PodIPv4: netip.MustParseAddr("10.244.1.10"), NetNSInode: 42, PeerLink: endpoint.LinkIdentity{NetNSInode: 42, IfIndex: 10, IfName: "eth0"}, HostLink: endpoint.LinkIdentity{IfIndex: 20, IfName: "vethweb"}}
 }

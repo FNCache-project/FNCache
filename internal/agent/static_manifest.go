@@ -8,9 +8,9 @@ import (
 	"net/netip"
 	"os"
 
-	"github.com/cat-cc-Lcos/FNCache/internal/discovery"
-	"github.com/cat-cc-Lcos/FNCache/internal/overlay/flannel"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
+	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/discovery"
+	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/flannel"
 	"gopkg.in/yaml.v3"
 )
 
@@ -107,26 +107,26 @@ func DecodeStaticRuntimeManifest(reader io.Reader) (StaticRuntimeConfig, error) 
 }
 
 func (m staticRuntimeManifest) runtimeConfig() (StaticRuntimeConfig, error) {
-	pods := make([]resolver.PodSnapshot, 0, len(m.Pods))
+	pods := make([]endpoint.PodSnapshot, 0, len(m.Pods))
 	for _, pod := range m.Pods {
 		ip, err := netip.ParseAddr(pod.PodIPv4)
 		if err != nil {
 			return StaticRuntimeConfig{}, fmt.Errorf("parse Pod IPv4 %q: %w", pod.PodIPv4, err)
 		}
-		pods = append(pods, resolver.PodSnapshot{Identity: resolver.PodIdentity{Namespace: pod.Namespace, Name: pod.Name, UID: pod.UID}, NodeName: pod.NodeName, PodIPv4: ip, HostNetwork: pod.HostNetwork, Phase: pod.Phase, Deleting: pod.Deleting, ResourceVersion: pod.ResourceVersion})
+		pods = append(pods, endpoint.PodSnapshot{Identity: endpoint.PodIdentity{Namespace: pod.Namespace, Name: pod.Name, UID: pod.UID}, NodeName: pod.NodeName, PodIPv4: ip, HostNetwork: pod.HostNetwork, Phase: pod.Phase, Deleting: pod.Deleting, ResourceVersion: pod.ResourceVersion})
 	}
-	links := make([]resolver.LinkIdentity, 0, len(m.TCLinks))
+	links := make([]endpoint.LinkIdentity, 0, len(m.TCLinks))
 	for _, link := range m.TCLinks {
 		mac, err := net.ParseMAC(link.MAC)
 		if err != nil {
 			return StaticRuntimeConfig{}, fmt.Errorf("parse TC link MAC %q: %w", link.MAC, err)
 		}
-		links = append(links, resolver.LinkIdentity{NetNSInode: link.NetNSInode, IfIndex: link.IfIndex, IfName: link.IfName, MAC: mac})
+		links = append(links, endpoint.LinkIdentity{NetNSInode: link.NetNSInode, IfIndex: link.IfIndex, IfName: link.IfName, MAC: mac})
 	}
 	return StaticRuntimeConfig{
 		ELFPath: m.ELFPath, PinRoot: m.PinRoot, StatePath: m.StatePath, InstallationID: m.InstallationID, ELFBuildID: m.ELFBuildID,
 		Generation: m.Generation, HeartbeatNS: m.HeartbeatNS, HeartbeatTimeoutNS: m.HeartbeatTimeout, Flags: m.Flags,
-		Preflight: discovery.PreflightRequest{Node: resolver.NodeIdentity{Name: m.Preflight.NodeName, UID: m.Preflight.NodeUID}, PinRoot: m.PinRoot, StateDir: m.Preflight.StateDir, InstallationID: m.InstallationID, ELFBuildID: m.ELFBuildID, RuntimeURI: m.Preflight.RuntimeEndpoint, Overlay: m.Preflight.Overlay},
+		Preflight: discovery.PreflightRequest{Node: endpoint.NodeIdentity{Name: m.Preflight.NodeName, UID: m.Preflight.NodeUID}, PinRoot: m.PinRoot, StateDir: m.Preflight.StateDir, InstallationID: m.InstallationID, ELFBuildID: m.ELFBuildID, RuntimeURI: m.Preflight.RuntimeEndpoint, Overlay: m.Preflight.Overlay},
 		Flannel:   flannel.DiscoveryRequest{VXLANLinkName: m.Flannel.VXLANLinkName, UnderlayDevice: m.Flannel.UnderlayDevice, MissMask: m.Flannel.MissMask, EstablishedMask: m.Flannel.EstablishedMask, IPTablesBackend: m.Flannel.IPTablesBackend}, Marker: m.Marker, Pods: pods, TCLinks: links,
 	}, nil
 }

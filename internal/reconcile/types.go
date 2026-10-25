@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cat-cc-Lcos/FNCache/internal/discovery"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
+	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/discovery"
 )
 
 type ReconcileKind string
@@ -65,8 +65,8 @@ type RemoteEndpoint struct {
 
 type FlannelState struct {
 	BackendType     string
-	VXLANLink       resolver.LinkIdentity
-	UnderlayLink    resolver.LinkIdentity
+	VXLANLink       endpoint.LinkIdentity
+	UnderlayLink    endpoint.LinkIdentity
 	UnderlayIPv4    netip.Addr
 	PodCIDR         netip.Prefix
 	VNI             uint32
@@ -94,8 +94,8 @@ type DesiredState struct {
 	Enabled             bool
 	Capability          discovery.CapabilityReport
 	Flannel             FlannelState
-	LocalPods           map[string]resolver.PodSnapshot
-	LocalEndpoints      map[string]resolver.Endpoint
+	LocalPods           map[string]endpoint.PodSnapshot
+	LocalEndpoints      map[string]endpoint.Endpoint
 	EndpointScanSkipped map[string]string
 	RemoteEndpoints     map[netip.Addr]RemoteEndpoint
 	Datapath            DatapathSpec
@@ -152,7 +152,7 @@ type MapState struct {
 }
 
 type AttachmentState struct {
-	Link         resolver.LinkIdentity
+	Link         endpoint.LinkIdentity
 	Hook         string
 	Program      string
 	Priority     uint16

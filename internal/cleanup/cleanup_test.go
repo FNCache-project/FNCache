@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/cat-cc-Lcos/FNCache/internal/datapath"
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 )
 
 type fakeExecutor struct{ calls []string }
@@ -37,7 +37,7 @@ func (f *fakeExecutor) RemoveState(context.Context) error {
 }
 
 func TestBuildPlanRequiresMatchingOwnershipEvidence(t *testing.T) {
-	link := resolver.LinkIdentity{IfIndex: 2}
+	link := endpoint.LinkIdentity{IfIndex: 2}
 	state := reconcile.OwnershipState{
 		Programs:       map[string]reconcile.ProgramState{"tc_init_e": {ID: 10}},
 		Maps:           map[string]reconcile.MapState{"control_map": {ID: 20}},
@@ -62,7 +62,7 @@ func TestBuildPlanRequiresMatchingOwnershipEvidence(t *testing.T) {
 }
 
 func TestBuildPlanBlocksNonDirectActionFilter(t *testing.T) {
-	link := resolver.LinkIdentity{IfIndex: 7}
+	link := endpoint.LinkIdentity{IfIndex: 7}
 	owned := reconcile.AttachmentState{Link: link, Hook: string(datapath.HookEgress), Program: "tc_init_e", Priority: datapath.FixedTCPriority, Handle: 0x100, ProgramID: 10, DirectAction: true}
 	actual := owned
 	actual.DirectAction = false
@@ -94,7 +94,7 @@ func TestCleanupPlanDryRunHasNoSideEffects(t *testing.T) {
 }
 
 func TestBuildPlanSkipsUnresolvedNetNSAttachment(t *testing.T) {
-	attachment := reconcile.AttachmentState{Link: resolver.LinkIdentity{NetNSInode: 42, IfIndex: 7}, Program: "tc_init_in", ProgramID: 11, Hook: string(datapath.HookIngress), Priority: datapath.FixedTCPriority, Handle: 0x201}
+	attachment := reconcile.AttachmentState{Link: endpoint.LinkIdentity{NetNSInode: 42, IfIndex: 7}, Program: "tc_init_in", ProgramID: 11, Hook: string(datapath.HookIngress), Priority: datapath.FixedTCPriority, Handle: 0x201}
 	plan := BuildPlan(reconcile.OwnershipState{}, reconcile.ActualState{}, reconcile.RuleState{}, "ONCACHE/oncache:dev", []reconcile.AttachmentState{attachment})
 	if len(plan.Blocked) != 0 || len(plan.Actions) != 1 || plan.Actions[0].Kind != ActionState {
 		t.Fatalf("unresolved netns attachment was not skipped safely: %+v", plan)
