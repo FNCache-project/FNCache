@@ -161,7 +161,7 @@ int tc_masq(struct __sk_buff *ctx) {
 
     // Check for restore cache
     struct oncache_ingress_v1* ingressinfo_ = bpf_map_lookup_elem(&ingress_cache, &iphdr->saddr);
-    if (!ingressinfo_ || ingressinfo_->src_mac[0] == 0x0) {
+    if (!ingressinfo_ || oncache_mac_is_zero(ingressinfo_->src_mac)) {
         oncache_stat_inc(ONCACHE_STAT_MASQ_INGRESS_NOT_READY);
         goto out;
     }
@@ -257,7 +257,7 @@ int tc_restore(struct __sk_buff *ctx) {
     }
     struct oncache_ingress_v1 *ingressinfo_ =
         bpf_map_lookup_elem(&ingress_cache, &inner_iph->daddr);
-    if (!ingressinfo_ || ingressinfo_->src_mac[0] == 0x0) {
+    if (!ingressinfo_ || oncache_mac_is_zero(ingressinfo_->src_mac)) {
         oncache_stat_inc(ONCACHE_STAT_RESTORE_POD_NOT_READY);
         goto out;
     }

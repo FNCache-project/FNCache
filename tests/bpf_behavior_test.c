@@ -335,6 +335,73 @@ static int learn_hit_tests(const char *path) {
     return 0;
 }
 
+static int leading_zero_mac_tests(const char *path) {
+    struct env e;
+    uint8_t packet[PACKET_MAX], output[PACKET_MAX];
+    if (load_env(path, &e) || control(&e, 1, 0, 0, UINT64_MAX) ||
+        seed_hit(&e, IF_IN, VXLAN_TEST_PORT, VXLAN_TEST_VNI)) return 1;
+
+    size_t len = plain_packet(packet, 0x0c, IPPROTO_UDP, IP_B, IP_A);
+    packet[6] = 0;
+    if (run(program(&e, "tc_init_in"), packet, len, IF_IN, output) != TC_ACT_OK) {
+        fprintf(stderr, "FAIL: leading-zero ingress learning for tc_masq\n");
+        return 1;
+    }
+    len = plain_packet(packet, 0x0c, IPPROTO_UDP, IP_A, IP_B);
+    packet[6] = 0;
+    if (run(program(&e, "tc_init_in"), packet, len, IF_IN, output) != TC_ACT_OK) {
+        fprintf(stderr, "FAIL: leading-zero ingress learning for tc_restore\n");
+        return 1;
+    }
+
+    uint32_t keys[] = {IP_A, IP_B};
+    for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+        struct oncache_ingress_v1 ingress = {};
+        if (bpf_map_lookup_elem(e.ingress, &keys[i], &ingress) ||
+            ingress.src_mac[0] != 0 || ingress.src_mac[1] == 0) {
+            fprintf(stderr, "FAIL: leading-zero MAC was not learned\n");
+            return 1;
+        }
+    }
+
+    len = plain_packet(packet, 0xa0, IPPROTO_UDP, IP_A, IP_B);
+    if (run(program(&e, "tc_masq"), packet, len, IF_IN, output) != TC_ACT_REDIRECT) {
+        fprintf(stderr, "FAIL: masq rejected leading-zero MAC\n");
+        return 1;
+    }
+    len = vxlan_packet(packet, 0, IP_A, IP_B, IP_NODE,
+                       VXLAN_TEST_PORT, VXLAN_TEST_VNI);
+    if (run(program(&e, "tc_restore"), packet, len, IF_IN, output) != TC_ACT_REDIRECT) {
+        fprintf(stderr, "FAIL: restore rejected leading-zero MAC\n");
+        return 1;
+    }
+
+    for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+        struct oncache_ingress_v1 ingress = {};
+        if (bpf_map_lookup_elem(e.ingress, &keys[i], &ingress)) return 1;
+        memset(ingress.src_mac, 0, sizeof(ingress.src_mac));
+        if (bpf_map_update_elem(e.ingress, &keys[i], &ingress, BPF_ANY)) return 1;
+    }
+    len = plain_packet(packet, 0, IPPROTO_UDP, IP_A, IP_B);
+    memcpy(output, packet, sizeof(output));
+    if (run(program(&e, "tc_masq"), packet, len, IF_IN, output) != TC_ACT_OK ||
+        memcmp(packet, output, len) != 0) {
+        fprintf(stderr, "FAIL: all-zero MAC did not preserve masq fallback\n");
+        return 1;
+    }
+    len = vxlan_packet(packet, 0, IP_A, IP_B, IP_NODE,
+                       VXLAN_TEST_PORT, VXLAN_TEST_VNI);
+    memcpy(output, packet, sizeof(output));
+    if (run(program(&e, "tc_restore"), packet, len, IF_IN, output) != TC_ACT_OK ||
+        memcmp(packet, output, len) != 0) {
+        fprintf(stderr, "FAIL: all-zero MAC did not preserve restore fallback\n");
+        return 1;
+    }
+
+    close_env(&e);
+    return 0;
+}
+
 static int vxlan_validation_tests(const char *path) {
     struct env e;
     uint8_t packet[PACKET_MAX], output[PACKET_MAX];
@@ -478,6 +545,8 @@ int main(int argc, char **argv) {
     if (malformed_tests(argv[1])) return 1;
     puts("learn-hit");
     if (learn_hit_tests(argv[1])) return 1;
+    puts("leading-zero-mac");
+    if (leading_zero_mac_tests(argv[1])) return 1;
     puts("vxlan-validation");
     if (vxlan_validation_tests(argv[1])) return 1;
     puts("icmp-fallback");
