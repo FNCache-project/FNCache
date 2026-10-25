@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/cat-cc-Lcos/FNCache/internal/datapath"
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 )
 
 type fakeBaseTCBackend struct {
@@ -15,14 +15,14 @@ type fakeBaseTCBackend struct {
 	attached []datapath.TCFilterSpec
 }
 
-func (f *fakeBaseTCBackend) EnsureClsact(ctx context.Context, link resolver.LinkIdentity) (datapath.TCQdiscState, error) {
+func (f *fakeBaseTCBackend) EnsureClsact(ctx context.Context, link endpoint.LinkIdentity) (datapath.TCQdiscState, error) {
 	if err := ctx.Err(); err != nil {
 		return datapath.TCQdiscState{}, err
 	}
 	return datapath.TCQdiscState{Link: link, Exists: true}, nil
 }
 
-func (f *fakeBaseTCBackend) ListFilters(ctx context.Context, link resolver.LinkIdentity) ([]datapath.TCFilterState, error) {
+func (f *fakeBaseTCBackend) ListFilters(ctx context.Context, link endpoint.LinkIdentity) ([]datapath.TCFilterState, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -122,7 +122,7 @@ func TestBaseEnsurerDisabledIsNoOp(t *testing.T) {
 }
 
 func baseDesiredState() reconcile.DesiredState {
-	return reconcile.DesiredState{Enabled: true, Flannel: reconcile.FlannelState{UnderlayLink: resolver.LinkIdentity{IfIndex: 2, IfName: "eth0"}}}
+	return reconcile.DesiredState{Enabled: true, Flannel: reconcile.FlannelState{UnderlayLink: endpoint.LinkIdentity{IfIndex: 2, IfName: "eth0"}}}
 }
 
 func baseActualState() reconcile.ActualState {

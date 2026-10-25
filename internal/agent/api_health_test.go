@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cat-cc-Lcos/FNCache/internal/kube"
+	"github.com/cat-cc-Lcos/FNCache/internal/kubernetes"
 )
 
 type fakeAPIHealthSource struct {
-	health   kube.APIHealth
+	health   kubernetes.APIHealth
 	probeErr error
 }
 
@@ -22,7 +22,7 @@ func (s *fakeAPIHealthSource) ProbeAPI(context.Context) error {
 	return s.probeErr
 }
 
-func (s *fakeAPIHealthSource) Health() kube.APIHealth { return s.health }
+func (s *fakeAPIHealthSource) Health() kubernetes.APIHealth { return s.health }
 
 func newAPIHealthMonitor(t *testing.T, source APIHealthSource, now time.Time) *APIHealthMonitor {
 	t.Helper()
@@ -34,7 +34,7 @@ func newAPIHealthMonitor(t *testing.T, source APIHealthSource, now time.Time) *A
 }
 
 func TestAPIHealthMonitorFreshUsesLastSuccessfulProbe(t *testing.T) {
-	source := &fakeAPIHealthSource{health: kube.APIHealth{Synced: true, LastProbeAt: time.Unix(100, 0)}}
+	source := &fakeAPIHealthSource{health: kubernetes.APIHealth{Synced: true, LastProbeAt: time.Unix(100, 0)}}
 	if err := newAPIHealthMonitor(t, source, time.Unix(100, int64(500*time.Millisecond))).Fresh(context.Background()); err != nil {
 		t.Fatalf("fresh API was rejected: %v", err)
 	}
@@ -51,14 +51,14 @@ func TestAPIHealthMonitorFreshUsesLastSuccessfulProbe(t *testing.T) {
 }
 
 func TestAPIHealthMonitorAllowsRecentProbeFailure(t *testing.T) {
-	source := &fakeAPIHealthSource{health: kube.APIHealth{Synced: true, LastProbeAt: time.Unix(100, 0)}, probeErr: errors.New("temporary API failure")}
+	source := &fakeAPIHealthSource{health: kubernetes.APIHealth{Synced: true, LastProbeAt: time.Unix(100, 0)}, probeErr: errors.New("temporary API failure")}
 	if err := newAPIHealthMonitor(t, source, time.Unix(100, int64(500*time.Millisecond))).Check(context.Background()); err != nil {
 		t.Fatalf("recent API failure caused degradation: %v", err)
 	}
 }
 
 func TestAPIHealthMonitorReportsStaleAPI(t *testing.T) {
-	source := &fakeAPIHealthSource{health: kube.APIHealth{Synced: true, LastProbeAt: time.Unix(100, 0)}, probeErr: errors.New("API unavailable")}
+	source := &fakeAPIHealthSource{health: kubernetes.APIHealth{Synced: true, LastProbeAt: time.Unix(100, 0)}, probeErr: errors.New("API unavailable")}
 	monitor, err := NewAPIHealthMonitor(APIHealthMonitorConfig{Source: source, Interval: time.Second, MaxStaleness: time.Second, Now: func() time.Time { return time.Unix(102, 0) }})
 	if err != nil {
 		t.Fatal(err)
@@ -69,7 +69,7 @@ func TestAPIHealthMonitorReportsStaleAPI(t *testing.T) {
 }
 
 func TestAPIHealthMonitorHonorsCancellation(t *testing.T) {
-	source := &fakeAPIHealthSource{health: kube.APIHealth{Synced: true, LastProbeAt: time.Unix(100, 0)}}
+	source := &fakeAPIHealthSource{health: kubernetes.APIHealth{Synced: true, LastProbeAt: time.Unix(100, 0)}}
 	monitor := newAPIHealthMonitor(t, source, time.Unix(100, 0))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/cat-cc-Lcos/FNCache/internal/datapath"
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 )
 
 type OwnershipCommitter interface {
@@ -262,7 +262,7 @@ func isPublisherCapacityMap(name string) bool {
 	}
 }
 
-func verifyAttachment(attachments []reconcile.AttachmentState, link resolver.LinkIdentity, hook datapath.TCHook, program string, programID uint32) error {
+func verifyAttachment(attachments []reconcile.AttachmentState, link endpoint.LinkIdentity, hook datapath.TCHook, program string, programID uint32) error {
 	spec, err := datapath.NewFixedFilter(link, program, programID, true)
 	if err != nil {
 		return fmt.Errorf("build verification filter %s: %w", program, err)

@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/cat-cc-Lcos/FNCache/internal/datapath"
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 )
 
 type fakeMapStore struct {
@@ -168,17 +168,17 @@ func TestMapEnsurerUsesConfiguredMapCapacities(t *testing.T) {
 	}
 }
 
-func mapEnsureTestEndpoint() resolver.Endpoint {
-	return resolver.Endpoint{
-		Pod:  resolver.PodIdentity{Namespace: "default", Name: "web", UID: "pod-a"},
-		Node: resolver.NodeIdentity{Name: "node-a"}, PodIPv4: netip.MustParseAddr("10.244.1.10"), NetNSInode: 42,
-		PeerLink: resolver.LinkIdentity{NetNSInode: 42, IfIndex: 10, IfName: "eth0", MAC: []byte{2, 0, 0, 0, 0, 2}},
-		HostLink: resolver.LinkIdentity{IfIndex: 20, IfName: "vethweb", MAC: []byte{2, 0, 0, 0, 0, 3}},
+func mapEnsureTestEndpoint() endpoint.Endpoint {
+	return endpoint.Endpoint{
+		Pod:  endpoint.PodIdentity{Namespace: "default", Name: "web", UID: "pod-a"},
+		Node: endpoint.NodeIdentity{Name: "node-a"}, PodIPv4: netip.MustParseAddr("10.244.1.10"), NetNSInode: 42,
+		PeerLink: endpoint.LinkIdentity{NetNSInode: 42, IfIndex: 10, IfName: "eth0", MAC: []byte{2, 0, 0, 0, 0, 2}},
+		HostLink: endpoint.LinkIdentity{IfIndex: 20, IfName: "vethweb", MAC: []byte{2, 0, 0, 0, 0, 3}},
 	}
 }
 
-func mapEnsureDesired(endpoint resolver.Endpoint) reconcile.DesiredState {
-	return reconcile.DesiredState{Enabled: true, LocalEndpoints: map[string]resolver.Endpoint{endpoint.Pod.UID: endpoint}, Flannel: reconcile.FlannelState{UnderlayLink: resolver.LinkIdentity{IfIndex: 2, IfName: "eth0", MAC: []byte{2, 0, 0, 0, 0, 1}}, UnderlayIPv4: netip.MustParseAddr("192.0.2.10")}}
+func mapEnsureDesired(resolvedEndpoint endpoint.Endpoint) reconcile.DesiredState {
+	return reconcile.DesiredState{Enabled: true, LocalEndpoints: map[string]endpoint.Endpoint{resolvedEndpoint.Pod.UID: resolvedEndpoint}, Flannel: reconcile.FlannelState{UnderlayLink: endpoint.LinkIdentity{IfIndex: 2, IfName: "eth0", MAC: []byte{2, 0, 0, 0, 0, 1}}, UnderlayIPv4: netip.MustParseAddr("192.0.2.10")}}
 }
 
 func mapEnsureActual() reconcile.ActualState {

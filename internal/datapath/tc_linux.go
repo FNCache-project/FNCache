@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
 	"github.com/cilium/ebpf"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
@@ -30,11 +30,11 @@ type kernelFilter struct {
 	FD             int
 }
 type tcNetlinkAPI interface {
-	listQdiscs(context.Context, resolver.LinkIdentity) ([]kernelQdisc, error)
-	addQdisc(context.Context, resolver.LinkIdentity, kernelQdisc) error
-	listFilters(context.Context, resolver.LinkIdentity, uint32) ([]kernelFilter, error)
-	addFilter(context.Context, resolver.LinkIdentity, kernelFilter) error
-	deleteFilter(context.Context, resolver.LinkIdentity, kernelFilter) error
+	listQdiscs(context.Context, endpoint.LinkIdentity) ([]kernelQdisc, error)
+	addQdisc(context.Context, endpoint.LinkIdentity, kernelQdisc) error
+	listFilters(context.Context, endpoint.LinkIdentity, uint32) ([]kernelFilter, error)
+	addFilter(context.Context, endpoint.LinkIdentity, kernelFilter) error
+	deleteFilter(context.Context, endpoint.LinkIdentity, kernelFilter) error
 }
 type tcProgram interface {
 	FD() int
@@ -62,7 +62,7 @@ func newLinuxTCBackend(pinRoot string, api tcNetlinkAPI, loader tcProgramLoader)
 	}
 	return &linuxTCBackend{pinRoot: filepath.Clean(pinRoot), api: api, loader: loader}, nil
 }
-func (b *linuxTCBackend) EnsureClsact(ctx context.Context, link resolver.LinkIdentity) (TCQdiscState, error) {
+func (b *linuxTCBackend) EnsureClsact(ctx context.Context, link endpoint.LinkIdentity) (TCQdiscState, error) {
 	if err := validateLink(link); err != nil {
 		return TCQdiscState{}, err
 	}
@@ -86,7 +86,7 @@ func (b *linuxTCBackend) EnsureClsact(ctx context.Context, link resolver.LinkIde
 	}
 	return TCQdiscState{Link: link, Exists: true, CreatedByOncache: true}, nil
 }
-func (b *linuxTCBackend) ListFilters(ctx context.Context, link resolver.LinkIdentity) ([]TCFilterState, error) {
+func (b *linuxTCBackend) ListFilters(ctx context.Context, link endpoint.LinkIdentity) ([]TCFilterState, error) {
 	if err := validateLink(link); err != nil {
 		return nil, err
 	}
@@ -266,7 +266,7 @@ func parentForHook(hook TCHook) (uint32, error) {
 
 type netlinkTCAPI struct{}
 
-func (netlinkTCAPI) listQdiscs(ctx context.Context, identity resolver.LinkIdentity) ([]kernelQdisc, error) {
+func (netlinkTCAPI) listQdiscs(ctx context.Context, identity endpoint.LinkIdentity) ([]kernelQdisc, error) {
 	var result []kernelQdisc
 	err := withNetlinkHandle(ctx, identity, func(handle *netlink.Handle) error {
 		link, err := lookupLink(handle, identity)
@@ -289,7 +289,7 @@ func (netlinkTCAPI) listQdiscs(ctx context.Context, identity resolver.LinkIdenti
 	return result, err
 }
 
-func (netlinkTCAPI) addQdisc(ctx context.Context, identity resolver.LinkIdentity, qdisc kernelQdisc) error {
+func (netlinkTCAPI) addQdisc(ctx context.Context, identity endpoint.LinkIdentity, qdisc kernelQdisc) error {
 	return withNetlinkHandle(ctx, identity, func(handle *netlink.Handle) error {
 		if _, err := lookupLink(handle, identity); err != nil {
 			return err
@@ -298,7 +298,7 @@ func (netlinkTCAPI) addQdisc(ctx context.Context, identity resolver.LinkIdentity
 	})
 }
 
-func (netlinkTCAPI) listFilters(ctx context.Context, identity resolver.LinkIdentity, parent uint32) ([]kernelFilter, error) {
+func (netlinkTCAPI) listFilters(ctx context.Context, identity endpoint.LinkIdentity, parent uint32) ([]kernelFilter, error) {
 	var result []kernelFilter
 	err := withNetlinkHandle(ctx, identity, func(handle *netlink.Handle) error {
 		link, err := lookupLink(handle, identity)
@@ -330,7 +330,7 @@ func (netlinkTCAPI) listFilters(ctx context.Context, identity resolver.LinkIdent
 	return result, err
 }
 
-func (netlinkTCAPI) addFilter(ctx context.Context, identity resolver.LinkIdentity, filter kernelFilter) error {
+func (netlinkTCAPI) addFilter(ctx context.Context, identity endpoint.LinkIdentity, filter kernelFilter) error {
 	return withNetlinkHandle(ctx, identity, func(handle *netlink.Handle) error {
 		if _, err := lookupLink(handle, identity); err != nil {
 			return err
@@ -339,7 +339,7 @@ func (netlinkTCAPI) addFilter(ctx context.Context, identity resolver.LinkIdentit
 	})
 }
 
-func (netlinkTCAPI) deleteFilter(ctx context.Context, identity resolver.LinkIdentity, filter kernelFilter) error {
+func (netlinkTCAPI) deleteFilter(ctx context.Context, identity endpoint.LinkIdentity, filter kernelFilter) error {
 	return withNetlinkHandle(ctx, identity, func(handle *netlink.Handle) error {
 		if _, err := lookupLink(handle, identity); err != nil {
 			return err
@@ -348,7 +348,7 @@ func (netlinkTCAPI) deleteFilter(ctx context.Context, identity resolver.LinkIden
 	})
 }
 
-func withNetlinkHandle(ctx context.Context, identity resolver.LinkIdentity, fn func(*netlink.Handle) error) error {
+func withNetlinkHandle(ctx context.Context, identity endpoint.LinkIdentity, fn func(*netlink.Handle) error) error {
 	if fn == nil {
 		return fmt.Errorf("netlink callback is required")
 	}
@@ -375,7 +375,7 @@ func withNetlinkHandle(ctx context.Context, identity resolver.LinkIdentity, fn f
 	return NewNetNSManager().WithNetNS(ctx, NetNSRef{Path: identity.NetNSPath, Inode: identity.NetNSInode}, openAndRun)
 }
 
-func lookupLink(handle *netlink.Handle, identity resolver.LinkIdentity) (netlink.Link, error) {
+func lookupLink(handle *netlink.Handle, identity endpoint.LinkIdentity) (netlink.Link, error) {
 	link, err := handle.LinkByIndex(identity.IfIndex)
 	if err != nil {
 		return nil, err

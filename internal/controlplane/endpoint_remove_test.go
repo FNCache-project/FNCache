@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/cat-cc-Lcos/FNCache/internal/datapath"
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 )
 
 type fakeEndpointMaps struct{ calls []string }
@@ -35,13 +35,13 @@ func ownedEndpoint() reconcile.OwnedEndpoint {
 
 func endpointAttachments() []reconcile.AttachmentState {
 	return []reconcile.AttachmentState{
-		{Link: resolver.LinkIdentity{NetNSInode: 42, IfIndex: 7, NetNSPath: "/proc/1/ns/net"}, Hook: string(datapath.HookIngress), Program: "tc_init_in", Priority: datapath.FixedTCPriority, Handle: 0x201, ProgramID: 11, DirectAction: true},
-		{Link: resolver.LinkIdentity{IfIndex: 8}, Hook: string(datapath.HookIngress), Program: "tc_masq", Priority: datapath.FixedTCPriority, Handle: 0x200, ProgramID: 12, DirectAction: true},
+		{Link: endpoint.LinkIdentity{NetNSInode: 42, IfIndex: 7, NetNSPath: "/proc/1/ns/net"}, Hook: string(datapath.HookIngress), Program: "tc_init_in", Priority: datapath.FixedTCPriority, Handle: 0x201, ProgramID: 11, DirectAction: true},
+		{Link: endpoint.LinkIdentity{IfIndex: 8}, Hook: string(datapath.HookIngress), Program: "tc_masq", Priority: datapath.FixedTCPriority, Handle: 0x200, ProgramID: 12, DirectAction: true},
 	}
 }
 
 func emptyEndpointDesired() reconcile.DesiredState {
-	return reconcile.DesiredState{LocalEndpoints: map[string]resolver.Endpoint{}}
+	return reconcile.DesiredState{LocalEndpoints: map[string]endpoint.Endpoint{}}
 }
 
 func TestEndpointRemoverInvalidatesMapsBeforeRemovingOwnedFilters(t *testing.T) {
@@ -104,10 +104,10 @@ func TestEndpointRemoverProtectsReusedIPAndHostLink(t *testing.T) {
 	maps := &fakeEndpointMaps{}
 	tc := &fakeEndpointTC{}
 	remover, _ := NewEndpointRemover(maps, tc)
-	desired := reconcile.DesiredState{LocalEndpoints: map[string]resolver.Endpoint{
+	desired := reconcile.DesiredState{LocalEndpoints: map[string]endpoint.Endpoint{
 		"pod-new": {
-			Pod: resolver.PodIdentity{UID: "pod-new"}, PodIPv4: netip.MustParseAddr("10.42.0.2"), NetNSInode: 99,
-			PeerLink: resolver.LinkIdentity{NetNSInode: 99, IfIndex: 9}, HostLink: resolver.LinkIdentity{IfIndex: 8},
+			Pod: endpoint.PodIdentity{UID: "pod-new"}, PodIPv4: netip.MustParseAddr("10.42.0.2"), NetNSInode: 99,
+			PeerLink: endpoint.LinkIdentity{NetNSInode: 99, IfIndex: 9}, HostLink: endpoint.LinkIdentity{IfIndex: 8},
 		},
 	}}
 	if err := remover.Remove(context.Background(), ownedEndpoint(), reconcile.ActualState{
@@ -127,10 +127,10 @@ func TestEndpointRemoverDoesNotProtectOldProgramID(t *testing.T) {
 	maps := &fakeEndpointMaps{}
 	tc := &fakeEndpointTC{}
 	remover, _ := NewEndpointRemover(maps, tc)
-	desired := reconcile.DesiredState{LocalEndpoints: map[string]resolver.Endpoint{
+	desired := reconcile.DesiredState{LocalEndpoints: map[string]endpoint.Endpoint{
 		"pod-new": {
-			Pod: resolver.PodIdentity{UID: "pod-new"}, PodIPv4: netip.MustParseAddr("10.42.0.2"), NetNSInode: 42,
-			PeerLink: resolver.LinkIdentity{NetNSInode: 42, IfIndex: 7}, HostLink: resolver.LinkIdentity{IfIndex: 8},
+			Pod: endpoint.PodIdentity{UID: "pod-new"}, PodIPv4: netip.MustParseAddr("10.42.0.2"), NetNSInode: 42,
+			PeerLink: endpoint.LinkIdentity{NetNSInode: 42, IfIndex: 7}, HostLink: endpoint.LinkIdentity{IfIndex: 8},
 		},
 	}}
 	actual := reconcile.ActualState{

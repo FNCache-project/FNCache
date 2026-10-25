@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cat-cc-Lcos/FNCache/internal/overlay/flannel"
+	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/flannel"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
 )
 

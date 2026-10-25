@@ -8,11 +8,11 @@ import (
 
 	"github.com/cat-cc-Lcos/FNCache/internal/controlplane"
 	"github.com/cat-cc-Lcos/FNCache/internal/datapath"
-	"github.com/cat-cc-Lcos/FNCache/internal/discovery"
-	"github.com/cat-cc-Lcos/FNCache/internal/overlay/flannel"
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
+	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/discovery"
+	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/flannel"
 	"github.com/cat-cc-Lcos/FNCache/internal/ownership"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 )
 
 type datapathComponentConfig struct {
@@ -32,8 +32,8 @@ type datapathComponentConfig struct {
 
 type datapathComponents struct {
 	cri              io.Closer
-	endpointResolver resolver.EndpointResolver
-	endpointScanner  *resolver.EndpointScanner
+	endpointResolver endpoint.EndpointResolver
+	endpointScanner  *endpoint.EndpointScanner
 	pins             *datapath.PinScanner
 	tcScanner        *datapath.TCScanner
 	tc               controlplane.EndpointFilterRemover
@@ -80,10 +80,6 @@ type localMarkerEnsurer interface {
 	EnsureMarker(context.Context, reconcile.DesiredState) (bool, error)
 }
 
-type localBaseEnsurer interface {
-	EnsureBase(context.Context, reconcile.DesiredState, reconcile.ActualState) (bool, error)
-}
-
 func (c *datapathComponents) Close() error {
 	if c == nil || c.cri == nil {
 		return nil
@@ -98,7 +94,7 @@ func newDatapathComponents(ctx context.Context, config datapathComponentConfig) 
 		return nil, err
 	}
 	schema := datapath.V1SchemaWithCapacities(config.MapCapacities)
-	sandbox, cri, err := resolver.DialContainerdCRI(ctx, config.Preflight.RuntimeURI)
+	sandbox, cri, err := endpoint.DialContainerdCRI(ctx, config.Preflight.RuntimeURI)
 	if err != nil {
 		return nil, err
 	}
@@ -110,13 +106,13 @@ func newDatapathComponents(ctx context.Context, config datapathComponentConfig) 
 	}()
 
 	netns := datapath.NewNetNSManager()
-	endpointResolver, err := resolver.NewLinuxEndpointResolver(sandbox, func(ctx context.Context, info resolver.SandboxInfo, fn func(context.Context) error) error {
+	endpointResolver, err := endpoint.NewLinuxEndpointResolver(sandbox, func(ctx context.Context, info endpoint.SandboxInfo, fn func(context.Context) error) error {
 		return netns.WithNetNS(ctx, datapath.NetNSRef{Path: info.NetNSPath, Inode: info.NetNSInode}, fn)
 	})
 	if err != nil {
 		return nil, err
 	}
-	endpointScanner, err := resolver.NewEndpointScanner(endpointResolver)
+	endpointScanner, err := endpoint.NewEndpointScanner(endpointResolver)
 	if err != nil {
 		return nil, err
 	}

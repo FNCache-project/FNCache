@@ -9,29 +9,30 @@ import (
 	"sync"
 	"time"
 
-	"k8s.io/client-go/kubernetes"
+	k8skubernetes "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
 	"github.com/cat-cc-Lcos/FNCache/internal/cleanup"
 	"github.com/cat-cc-Lcos/FNCache/internal/config"
 	"github.com/cat-cc-Lcos/FNCache/internal/controlplane"
 	"github.com/cat-cc-Lcos/FNCache/internal/datapath"
-	"github.com/cat-cc-Lcos/FNCache/internal/discovery"
-	"github.com/cat-cc-Lcos/FNCache/internal/kube"
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
+	endpointlifecycle "github.com/cat-cc-Lcos/FNCache/internal/endpoint/lifecycle"
+	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/discovery"
+	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/flannel"
+	"github.com/cat-cc-Lcos/FNCache/internal/kubernetes"
+	"github.com/cat-cc-Lcos/FNCache/internal/kubernetes/queue"
 	"github.com/cat-cc-Lcos/FNCache/internal/observability"
-	"github.com/cat-cc-Lcos/FNCache/internal/overlay/flannel"
-	"github.com/cat-cc-Lcos/FNCache/internal/queue"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 )
 
 type DynamicRuntime struct {
 	config        config.AgentConfiguration
 	snapshots     *observability.SnapshotStore
-	store         *kube.SnapshotStore
-	source        *kube.InformerSource
+	store         *kubernetes.SnapshotStore
+	source        *kubernetes.InformerSource
 	bootstrap     *KubeBootstrap
-	resync        *kube.ResyncScheduler
+	resync        *kubernetes.ResyncScheduler
 	queue         *queue.Queue
 	barrier       *reconcile.CoordinationBarrier
 	lifecycle     *reconcile.AgentStateMachine
@@ -79,22 +80,22 @@ func NewDynamicRuntime(configPath string) (*DynamicRuntime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load in-cluster Kubernetes configuration: %w", err)
 	}
-	client, err := kubernetes.NewForConfig(clusterConfig)
+	client, err := k8skubernetes.NewForConfig(clusterConfig)
 	if err != nil {
 		return nil, fmt.Errorf("create Kubernetes client: %w", err)
 	}
 	return newDynamicRuntime(cfg, client)
 }
 
-func newDynamicRuntime(cfg config.AgentConfiguration, client kubernetes.Interface) (*DynamicRuntime, error) {
+func newDynamicRuntime(cfg config.AgentConfiguration, client k8skubernetes.Interface) (*DynamicRuntime, error) {
 	return newDynamicRuntimeWithFactory(cfg, client, newDatapathComponents)
 }
 
-func newDynamicRuntimeWithFactory(cfg config.AgentConfiguration, client kubernetes.Interface, factory datapathComponentFactory) (*DynamicRuntime, error) {
+func newDynamicRuntimeWithFactory(cfg config.AgentConfiguration, client k8skubernetes.Interface, factory datapathComponentFactory) (*DynamicRuntime, error) {
 	return newDynamicRuntimeWithFactoryAndLogger(cfg, client, factory, observability.NewDefault("queue"))
 }
 
-func newDynamicRuntimeWithFactoryAndLogger(cfg config.AgentConfiguration, client kubernetes.Interface, factory datapathComponentFactory, logger observability.EventLogger) (*DynamicRuntime, error) {
+func newDynamicRuntimeWithFactoryAndLogger(cfg config.AgentConfiguration, client k8skubernetes.Interface, factory datapathComponentFactory, logger observability.EventLogger) (*DynamicRuntime, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -104,9 +105,9 @@ func newDynamicRuntimeWithFactoryAndLogger(cfg config.AgentConfiguration, client
 	if logger == nil {
 		logger = observability.NewDefault("queue")
 	}
-	store := kube.NewSnapshotStore()
+	store := kubernetes.NewSnapshotStore()
 	interval := time.Duration(cfg.Kube.ResyncInterval)
-	source, err := kube.NewInformerSource(client, store, interval)
+	source, err := kubernetes.NewInformerSource(client, store, interval)
 	if err != nil {
 		return nil, err
 	}
@@ -114,18 +115,18 @@ func newDynamicRuntimeWithFactoryAndLogger(cfg config.AgentConfiguration, client
 	if err != nil {
 		return nil, fmt.Errorf("create coordination queue: %w", err)
 	}
-	classifier, err := kube.NewEventClassifier(cfg.NodeName)
+	classifier, err := kubernetes.NewEventClassifier(cfg.NodeName)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := kube.NewEventDispatcher(source, classifier, target); err != nil {
+	if _, err := kubernetes.NewEventDispatcher(source, classifier, target); err != nil {
 		return nil, err
 	}
 	bootstrap, err := NewKubeBootstrap(source, store)
 	if err != nil {
 		return nil, err
 	}
-	resync, err := kube.NewResyncScheduler(store, cfg.NodeName, target, interval)
+	resync, err := kubernetes.NewResyncScheduler(store, cfg.NodeName, target, interval)
 	if err != nil {
 		return nil, err
 	}
@@ -366,7 +367,7 @@ func (r *DynamicRuntime) initializeDatapathWithRetry(ctx context.Context) error 
 
 // initialDatapathRetry classifies dependencies that may become ready after startup.
 func initialDatapathRetry(err error) (time.Duration, bool) {
-	if errors.Is(err, ErrKubernetesSnapshotNotReady) || errors.Is(err, flannel.ErrDiscoveryNotReady) || errors.Is(err, resolver.ErrContainerdEndpointNotReady) {
+	if errors.Is(err, ErrKubernetesSnapshotNotReady) || errors.Is(err, flannel.ErrDiscoveryNotReady) || errors.Is(err, endpoint.ErrContainerdEndpointNotReady) {
 		return time.Second, true
 	}
 	return 0, false
@@ -504,7 +505,7 @@ func (r *DynamicRuntime) initializeDatapath(ctx context.Context) error {
 	if !ok || node.Identity.UID == "" {
 		return fmt.Errorf("%w: local Node %q is missing from Snapshot", ErrKubernetesSnapshotNotReady, r.config.NodeName)
 	}
-	runtimeEndpoint, err := resolver.ResolveContainerdEndpoint(ctx, r.config.RuntimeEndpoint)
+	runtimeEndpoint, err := endpoint.ResolveContainerdEndpoint(ctx, r.config.RuntimeEndpoint)
 	if err != nil {
 		return fmt.Errorf("resolve containerd endpoint: %w", err)
 	}
@@ -600,27 +601,27 @@ func (r *DynamicRuntime) initializeDatapath(ctx context.Context) error {
 		_ = components.Close()
 		return err
 	}
-	guard, err := NewEndpointReuseGuard(components.endpointResolver, r.config.NodeName)
+	guard, err := endpointlifecycle.NewEndpointReuseGuard(components.endpointResolver, r.config.NodeName)
 	if err != nil {
 		_ = components.Close()
 		return err
 	}
-	local, err := NewLocalEndpointHandler(LocalEndpointHandlerConfig{Store: r.store, Resolver: components.endpointResolver, LocalNode: r.config.NodeName, Desired: observer, Scanner: observer, Control: components.control, Endpoint: components.endpoint, Maps: components.maps, Remover: remover, Ownership: components.ownership, Publisher: components.publisher, Generation: generationTransaction})
+	local, err := endpointlifecycle.NewLocalEndpointHandler(endpointlifecycle.LocalEndpointHandlerConfig{Store: r.store, Resolver: components.endpointResolver, LocalNode: r.config.NodeName, Desired: observer, Scanner: observer, Control: components.control, Endpoint: components.endpoint, Maps: components.maps, Remover: remover, Ownership: components.ownership, Publisher: components.publisher, Generation: generationTransaction})
 	if err != nil {
 		_ = components.Close()
 		return err
 	}
-	deleting, err := NewLocalEndpointDeleteHandler(LocalEndpointDeleteHandlerConfig{Store: r.store, Ownership: components.ownership, LocalNode: r.config.NodeName, Desired: observer, Remover: remover, ReuseGuard: guard, Generation: generationTransaction})
+	deleting, err := endpointlifecycle.NewLocalEndpointDeleteHandler(endpointlifecycle.LocalEndpointDeleteHandlerConfig{Store: r.store, Ownership: components.ownership, LocalNode: r.config.NodeName, Desired: observer, Remover: remover, ReuseGuard: guard, Generation: generationTransaction})
 	if err != nil {
 		_ = components.Close()
 		return err
 	}
-	remote, err := NewRemoteChangeHandler(RemoteChangeHandlerConfig{Store: r.store, LocalNode: r.config.NodeName, Desired: observer, Maps: components.mapWriter, Base: components.base, DeviceMap: components.deviceMap, Generation: generationTransaction})
+	remote, err := endpointlifecycle.NewRemoteChangeHandler(endpointlifecycle.RemoteChangeHandlerConfig{Store: r.store, LocalNode: r.config.NodeName, Desired: observer, Maps: components.mapWriter, Base: components.base, DeviceMap: components.deviceMap, Generation: generationTransaction})
 	if err != nil {
 		_ = components.Close()
 		return err
 	}
-	router, err := NewDynamicHandlerRouter(local, deleting, remote)
+	router, err := endpointlifecycle.NewDynamicHandlerRouter(local, deleting, remote)
 	if err != nil {
 		_ = components.Close()
 		return err

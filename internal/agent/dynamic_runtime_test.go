@@ -19,9 +19,9 @@ import (
 	"github.com/cat-cc-Lcos/FNCache/internal/config"
 	"github.com/cat-cc-Lcos/FNCache/internal/controlplane"
 	"github.com/cat-cc-Lcos/FNCache/internal/datapath"
-	"github.com/cat-cc-Lcos/FNCache/internal/overlay/flannel"
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
+	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/flannel"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 )
 
 type dynamicRuntimeMaps struct{}
@@ -39,7 +39,7 @@ type dynamicRuntimeTC struct{}
 
 func (dynamicRuntimeTC) RemoveFilter(context.Context, datapath.TCFilterSpec) error { return nil }
 
-func (dynamicRuntimeTC) Scan(_ context.Context, links []resolver.LinkIdentity) (reconcile.ActualState, error) {
+func (dynamicRuntimeTC) Scan(_ context.Context, links []endpoint.LinkIdentity) (reconcile.ActualState, error) {
 	attachments := make([]reconcile.AttachmentState, 0, 4)
 	for _, link := range links {
 		switch link.IfIndex {
@@ -54,7 +54,7 @@ func (dynamicRuntimeTC) Scan(_ context.Context, links []resolver.LinkIdentity) (
 	return reconcile.ActualState{Attachments: attachments}, nil
 }
 
-func dynamicRuntimeAttachment(link resolver.LinkIdentity, program string, programID uint32) reconcile.AttachmentState {
+func dynamicRuntimeAttachment(link endpoint.LinkIdentity, program string, programID uint32) reconcile.AttachmentState {
 	spec, _ := datapath.NewFixedFilter(link, program, programID, true)
 	return reconcile.AttachmentState{Link: spec.Link, Hook: string(spec.Hook), Program: spec.Program, Priority: spec.Priority, Handle: spec.Handle, ProgramID: spec.ProgramID, DirectAction: spec.DirectAction}
 }
@@ -171,7 +171,7 @@ func TestInitialDatapathRetryCoversTransientDependencies(t *testing.T) {
 	for name, err := range map[string]error{
 		"snapshot":   fmt.Errorf("bootstrap: %w", ErrKubernetesSnapshotNotReady),
 		"flannel":    fmt.Errorf("baseline: %w", flannel.ErrDiscoveryNotReady),
-		"containerd": fmt.Errorf("runtime: %w", resolver.ErrContainerdEndpointNotReady),
+		"containerd": fmt.Errorf("runtime: %w", endpoint.ErrContainerdEndpointNotReady),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if delay, retry := initialDatapathRetry(err); !retry || delay != time.Second {

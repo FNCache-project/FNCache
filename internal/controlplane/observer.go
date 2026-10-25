@@ -7,10 +7,10 @@ import (
 	"net/netip"
 	"strings"
 
-	"github.com/cat-cc-Lcos/FNCache/internal/discovery"
-	"github.com/cat-cc-Lcos/FNCache/internal/overlay/flannel"
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
+	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/discovery"
+	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/flannel"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 )
 
 type PreflightSource interface {
@@ -22,7 +22,7 @@ type FlannelSource interface {
 }
 
 type EndpointSource interface {
-	Scan(context.Context, []resolver.PodSnapshot) (resolver.EndpointScanResult, error)
+	Scan(context.Context, []endpoint.PodSnapshot) (endpoint.EndpointScanResult, error)
 }
 
 type PinSource interface {
@@ -30,7 +30,7 @@ type PinSource interface {
 }
 
 type TCSource interface {
-	Scan(context.Context, []resolver.LinkIdentity) (reconcile.ActualState, error)
+	Scan(context.Context, []endpoint.LinkIdentity) (reconcile.ActualState, error)
 }
 
 type RuleSource interface {
@@ -51,9 +51,9 @@ type ObservationInput struct {
 	PreflightRequest    discovery.PreflightRequest
 	FlannelRequest      flannel.DiscoveryRequest
 	MarkerRule          flannel.MarkerRuleSpec
-	Pods                []resolver.PodSnapshot
-	TCLinks             []resolver.LinkIdentity
-	BaseTCLinks         []resolver.LinkIdentity
+	Pods                []endpoint.PodSnapshot
+	TCLinks             []endpoint.LinkIdentity
+	BaseTCLinks         []endpoint.LinkIdentity
 	EndpointScanSkipped map[string]error
 }
 
@@ -87,13 +87,13 @@ func NewObserver(sources Sources, input ObservationInput) (*Observer, error) {
 	}
 	input.PreflightRequest.MarkerChain = input.MarkerRule.Chain
 	input.PreflightRequest.MarkerComment = input.MarkerRule.Comment
-	input.Pods = append([]resolver.PodSnapshot(nil), input.Pods...)
-	input.TCLinks = append([]resolver.LinkIdentity(nil), input.TCLinks...)
+	input.Pods = append([]endpoint.PodSnapshot(nil), input.Pods...)
+	input.TCLinks = append([]endpoint.LinkIdentity(nil), input.TCLinks...)
 	baseTCLinks := input.BaseTCLinks
 	if baseTCLinks == nil {
 		baseTCLinks = input.TCLinks
 	}
-	input.BaseTCLinks = append([]resolver.LinkIdentity(nil), baseTCLinks...)
+	input.BaseTCLinks = append([]endpoint.LinkIdentity(nil), baseTCLinks...)
 	input.EndpointScanSkipped = cloneEndpointScanErrors(input.EndpointScanSkipped)
 	return &Observer{sources: sources, input: input}, nil
 }
@@ -110,7 +110,7 @@ func (o *Observer) Discover(ctx context.Context) (reconcile.DesiredState, error)
 		Generation:      o.input.Generation,
 		Enabled:         report.Supported,
 		Capability:      report,
-		LocalEndpoints:  make(map[string]resolver.Endpoint),
+		LocalEndpoints:  make(map[string]endpoint.Endpoint),
 		RemoteEndpoints: make(map[netip.Addr]reconcile.RemoteEndpoint),
 	}
 	if !report.Supported {
@@ -130,7 +130,7 @@ func (o *Observer) Discover(ctx context.Context) (reconcile.DesiredState, error)
 	}
 	o.input.EndpointScanSkipped = cloneEndpointScanErrors(endpoints.Skipped)
 	desired.EndpointScanSkipped = endpointScanReasons(endpoints.Skipped)
-	o.input.TCLinks = resolver.MergeEndpointLinks(o.input.BaseTCLinks, endpoints.Endpoints)
+	o.input.TCLinks = endpoint.MergeEndpointLinks(o.input.BaseTCLinks, endpoints.Endpoints)
 	for uid, endpoint := range endpoints.Endpoints {
 		desired.LocalEndpoints[uid] = endpoint
 	}
@@ -149,7 +149,7 @@ func (o *Observer) Discover(ctx context.Context) (reconcile.DesiredState, error)
 }
 
 func isEndpointScanIncompleteError(err error) bool {
-	return errors.Is(err, resolver.ErrEndpointNotReady) || errors.Is(err, resolver.ErrStaleObject)
+	return errors.Is(err, endpoint.ErrEndpointNotReady) || errors.Is(err, endpoint.ErrStaleObject)
 }
 
 func cloneEndpointScanErrors(skipped map[string]error) map[string]error {
