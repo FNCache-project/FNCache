@@ -261,6 +261,13 @@ func BuildPlan(state reconcile.OwnershipState, actual reconcile.ActualState, mar
 			plan.Actions = append(plan.Actions, Action{Kind: ActionMarker, Identity: owned.Identity, Evidence: []string{"marker fingerprint"}, marker: &owned})
 		} else if marker.Present {
 			plan.Blocked = append(plan.Blocked, Action{Kind: ActionMarker, Identity: state.FlannelRule.Identity, Evidence: []string{"marker fingerprint changed"}})
+		} else if marker.JumpsPresent {
+			if marker.Identity != markerIdentity {
+				plan.Blocked = append(plan.Blocked, Action{Kind: ActionMarker, Identity: state.FlannelRule.Identity, Evidence: []string{"marker hook identity differs"}})
+			} else {
+				owned := state.FlannelRule
+				plan.Actions = append(plan.Actions, Action{Kind: ActionMarker, Identity: owned.Identity, Evidence: []string{"marker hook identity", "marker rule missing"}, marker: &owned})
+			}
 		}
 	}
 	mapNames := make([]string, 0, len(state.Maps))
