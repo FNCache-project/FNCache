@@ -26,6 +26,55 @@ func TestLinuxConflictParsers(t *testing.T) {
 	if !hasReservedTOSConflict([]byte("-A ONCACHE -m tos --set-tos 0x08"), "", "") {
 		t.Fatal("TOS conflict was not detected")
 	}
+	tests := []struct {
+		name string
+		rule string
+		want bool
+	}{
+		{
+			name: "combined hex value and mask",
+			rule: "-A FORWARD -j TOS --set-tos 0x0c/0x0c",
+			want: true,
+		},
+		{
+			name: "decimal value and mask",
+			rule: "-A FORWARD -j TOS --set-tos 12/12",
+			want: true,
+		},
+		{
+			name: "short hex value and mask",
+			rule: "-A FORWARD -j TOS --set-tos 0xc/0xc",
+			want: true,
+		},
+		{
+			name: "equals form",
+			rule: "-A FORWARD -j TOS --set-tos=0xc/0xc",
+			want: true,
+		},
+		{
+			name: "set xmark",
+			rule: "-A FORWARD -j MARK --set-xmark 12/12",
+			want: true,
+		},
+		{
+			name: "reserved mask only",
+			rule: "-A FORWARD -j TOS --set-tos 0x01/0x08",
+			want: true,
+		},
+		{
+			name: "non-reserved value and mask",
+			rule: "-A FORWARD -j TOS --set-tos 0x01/0x01",
+			want: false,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := hasReservedTOSConflict([]byte(test.rule), "", "")
+			if got != test.want {
+				t.Fatalf("hasReservedTOSConflict(%q) = %v, want %v", test.rule, got, test.want)
+			}
+		})
+	}
 	if !hasFixedTCConflict([]byte(`[{"pref":1000,"handle":256}]`)) {
 		t.Fatal("TC conflict was not detected")
 	}

@@ -22,6 +22,8 @@ var requiredBPFHelpers = []string{
 	"bpf_skb_adjust_room", "bpf_skb_store_bytes", "bpf_l3_csum_replace", "bpf_spin_lock", "bpf_spin_unlock",
 }
 
+const reservedTOSMask uint32 = 0x04 | 0x08
+
 func hasHelper(output []byte, helper string) bool {
 	for _, field := range strings.Fields(string(output)) {
 		if strings.Trim(field, "[](){}:,\"'") == helper {
@@ -54,15 +56,76 @@ func hasReservedTOSConflict(output []byte, markerChain, markerComment string) bo
 		if isMarkerRule(line, markerChain, markerComment) {
 			continue
 		}
-		normalized := strings.ToLower(line)
-		if !strings.Contains(normalized, "set-tos") && !strings.Contains(normalized, "set-dscp") && !strings.Contains(normalized, "set-xmark") {
-			continue
-		}
-		if strings.Contains(normalized, "0x04") || strings.Contains(normalized, "0x08") {
+		if hasReservedTOSRuleValue(line) {
 			return true
 		}
 	}
 	return false
+}
+
+func hasReservedTOSRuleValue(line string) bool {
+	fields := strings.Fields(strings.ToLower(line))
+	for index := 0; index < len(fields); index++ {
+		field := strings.Trim(fields[index], "\"'")
+		option, value, inline := strings.Cut(field, "=")
+		switch option {
+		case "--set-dscp", "--set-dscp-class":
+			if !inline {
+				if index+1 >= len(fields) {
+					continue
+				}
+				index++
+			}
+			// DSCP occupies the TOS bits that include both FNCache markers.
+			return true
+		case "--tos", "--set-tos", "--set-xmark":
+			if !inline {
+				if index+1 >= len(fields) {
+					continue
+				}
+				value = fields[index+1]
+				index++
+			}
+			if tosValueTouchesReservedBits(value) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func tosValueTouchesReservedBits(raw string) bool {
+	raw = strings.TrimSpace(strings.Trim(raw, "\"'"))
+	parts := strings.Split(raw, "/")
+	if len(parts) > 2 {
+		return false
+	}
+	value, ok := parseNetfilterValue(parts[0])
+	if !ok {
+		return false
+	}
+	mask := ^uint32(0)
+	if len(parts) == 2 {
+		mask, ok = parseNetfilterValue(parts[1])
+		if !ok {
+			return false
+		}
+	}
+	return (value|mask)&reservedTOSMask != 0
+}
+
+func parseNetfilterValue(raw string) (uint32, bool) {
+	raw = strings.TrimSpace(strings.Trim(raw, "\"'()[]{};,"))
+	if raw == "" {
+		return 0, false
+	}
+	base := 10
+	if strings.HasPrefix(strings.ToLower(raw), "0x") {
+		raw = raw[2:]
+		base = 16
+	}
+	value, err := strconv.ParseUint(raw, base, 32)
+	return uint32(value), err == nil
 }
 
 func isMarkerRule(line, markerChain, markerComment string) bool {
