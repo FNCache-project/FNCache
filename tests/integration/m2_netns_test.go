@@ -16,6 +16,7 @@ import (
 	"github.com/cat-cc-Lcos/FNCache/internal/controlplane"
 	"github.com/cat-cc-Lcos/FNCache/internal/datapath"
 	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
+	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/flannel"
 	"github.com/cat-cc-Lcos/FNCache/internal/ownership"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
 	"github.com/cilium/ebpf"
@@ -297,7 +298,8 @@ func (o *integrationObserver) Scan(ctx context.Context) (reconcile.ActualState, 
 	}
 	actual.Attachments = append(actual.Attachments, tc.Attachments...)
 	actual.Conflicts = append(actual.Conflicts, tc.Conflicts...)
-	actual.FlannelRule = reconcile.RuleState{Present: true, JumpsPresent: true, Identity: "m2-integration-marker", Fingerprint: "m2-integration"}
+	marker := integrationMarkerSpec()
+	actual.FlannelRule = reconcile.RuleState{Present: true, JumpsPresent: true, Identity: marker.Chain + "/" + marker.Comment, Fingerprint: flannel.ExpectedMarkerFingerprint(marker)}
 	return actual, nil
 }
 
@@ -541,11 +543,17 @@ func (l *netNSLab) withNetNS(fn func(context.Context) error) error {
 }
 
 func baseDesired(link endpoint.LinkIdentity) reconcile.DesiredState {
+	marker := integrationMarkerSpec()
 	return reconcile.DesiredState{
 		Enabled:  true,
 		Datapath: reconcile.DatapathSpec{VXLANVNI: 1, VXLANUDPPort: 8472},
 		Flannel:  reconcile.FlannelState{UnderlayLink: link, UnderlayIPv4: netip.MustParseAddr("192.0.2.2"), VNI: 1, UDPPort: 8472},
+		Marker:   reconcile.MarkerRuleExpectation{Chain: marker.Chain, Comment: marker.Comment},
 	}
+}
+
+func integrationMarkerSpec() flannel.MarkerRuleSpec {
+	return flannel.MarkerRuleSpec{Chain: "ONCACHE", Comment: "oncache:m2-integration"}
 }
 
 func linkIdentity(name string, netnsInode uint64, netnsPath string) (endpoint.LinkIdentity, error) {

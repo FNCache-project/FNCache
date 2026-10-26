@@ -89,6 +89,11 @@ type DatapathSpec struct {
 	OverlayFingerprint string
 }
 
+type MarkerRuleExpectation struct {
+	Chain   string
+	Comment string
+}
+
 type DesiredState struct {
 	Generation          uint64
 	Enabled             bool
@@ -99,6 +104,7 @@ type DesiredState struct {
 	EndpointScanSkipped map[string]string
 	RemoteEndpoints     map[netip.Addr]RemoteEndpoint
 	Datapath            DatapathSpec
+	Marker              MarkerRuleExpectation
 }
 
 type ActualState struct {

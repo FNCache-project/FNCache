@@ -8,6 +8,7 @@ import (
 
 	"github.com/cat-cc-Lcos/FNCache/internal/datapath"
 	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
+	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/flannel"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
 )
 
@@ -166,6 +167,18 @@ func verifyState(desired reconcile.DesiredState, actual reconcile.ActualState, s
 	}
 	if !actual.FlannelRule.Present || !actual.FlannelRule.JumpsPresent {
 		return fmt.Errorf("Flannel marker rule or hook jumps are not present")
+	}
+	if desired.Marker.Chain == "" || desired.Marker.Comment == "" {
+		return fmt.Errorf("desired Flannel marker identity is missing")
+	}
+	markerSpec := flannel.MarkerRuleSpec{Chain: desired.Marker.Chain, Comment: desired.Marker.Comment}
+	expectedIdentity := markerSpec.Chain + "/" + markerSpec.Comment
+	if actual.FlannelRule.Identity != expectedIdentity {
+		return fmt.Errorf("Flannel marker identity mismatch: got %q want %q", actual.FlannelRule.Identity, expectedIdentity)
+	}
+	expectedFingerprint := flannel.ExpectedMarkerFingerprint(markerSpec)
+	if actual.FlannelRule.Fingerprint != expectedFingerprint {
+		return fmt.Errorf("Flannel marker fingerprint mismatch: got %q want %q", actual.FlannelRule.Fingerprint, expectedFingerprint)
 	}
 	if err := verifyAttachment(actual.Attachments, desired.Flannel.UnderlayLink, datapath.HookEgress, "tc_init_e", programs["tc_init_e"]); err != nil {
 		return err

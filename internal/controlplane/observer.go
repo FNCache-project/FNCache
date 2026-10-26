@@ -112,6 +112,7 @@ func (o *Observer) Discover(ctx context.Context) (reconcile.DesiredState, error)
 		Capability:      report,
 		LocalEndpoints:  make(map[string]endpoint.Endpoint),
 		RemoteEndpoints: make(map[netip.Addr]reconcile.RemoteEndpoint),
+		Marker:          reconcile.MarkerRuleExpectation{Chain: o.input.MarkerRule.Chain, Comment: o.input.MarkerRule.Comment},
 	}
 	if !report.Supported {
 		return desired, nil
