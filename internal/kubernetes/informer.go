@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"net/netip"
+	"strings"
 	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apiMeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/client-go/informers"
 	coreinformers "k8s.io/client-go/informers/core/v1"
 	"k8s.io/client-go/kubernetes"
@@ -16,6 +18,68 @@ import (
 	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
 )
 
+type informerObjectKey struct {
+	namespace string
+	name      string
+	uid       string
+}
+
+type informerError struct {
+	err             error
+	resourceVersion string
+}
+
+type informerErrorSet struct {
+	byObject map[informerObjectKey]informerError
+	unscoped error
+}
+
+func (s *informerErrorSet) record(key informerObjectKey, resourceVersion string, keyed bool, err error) {
+	if keyed {
+		if s.byObject == nil {
+			s.byObject = make(map[informerObjectKey]informerError)
+		}
+		s.byObject[key] = informerError{err: err, resourceVersion: resourceVersion}
+		return
+	}
+	s.unscoped = err
+}
+
+func (s *informerErrorSet) clear(key informerObjectKey, keyed bool) bool {
+	if !keyed {
+		return false
+	}
+	changed := false
+	for existing := range s.byObject {
+		if sameInformerObject(existing, key) {
+			delete(s.byObject, existing)
+			changed = true
+		}
+	}
+	return changed
+}
+
+func (s informerErrorSet) first() error {
+	if s.unscoped != nil {
+		return s.unscoped
+	}
+	for _, entry := range s.byObject {
+		return entry.err
+	}
+	return nil
+}
+
+func (s informerErrorSet) empty() bool {
+	return s.unscoped == nil && len(s.byObject) == 0
+}
+
+func sameInformerObject(left, right informerObjectKey) bool {
+	if left.uid != "" && right.uid != "" {
+		return left.uid == right.uid
+	}
+	return left.name != "" && left.namespace == right.namespace && left.name == right.name
+}
+
 type InformerSource struct {
 	factory          informers.SharedInformerFactory
 	pods             coreinformers.PodInformer
@@ -23,8 +87,9 @@ type InformerSource struct {
 	client           kubernetes.Interface
 	store            *SnapshotStore
 	errMu            sync.RWMutex
-	podErr           error
-	nodeErr          error
+	podErrors        informerErrorSet
+	nodeErrors       informerErrorSet
+	errorChanged     chan struct{}
 	healthMu         sync.RWMutex
 	synced           bool
 	lastProbeAt      time.Time
@@ -42,7 +107,7 @@ func NewInformerSource(client kubernetes.Interface, store *SnapshotStore, resync
 		return nil, fmt.Errorf("resync period cannot be negative")
 	}
 	factory := informers.NewSharedInformerFactory(client, resyncPeriod)
-	source := &InformerSource{factory: factory, pods: factory.Core().V1().Pods(), nodes: factory.Core().V1().Nodes(), client: client, store: store}
+	source := &InformerSource{factory: factory, pods: factory.Core().V1().Pods(), nodes: factory.Core().V1().Nodes(), client: client, store: store, errorChanged: make(chan struct{})}
 	if _, err := source.pods.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    source.addPod,
 		UpdateFunc: source.updatePod,
@@ -104,8 +169,19 @@ func (s *InformerSource) WaitForSync(ctx context.Context) error {
 		}
 		return fmt.Errorf("Pod and Node informers did not synchronize")
 	}
-	if err := s.LastError(); err != nil {
-		return fmt.Errorf("snapshot synchronization failed: %w", err)
+	for {
+		s.errMu.RLock()
+		if s.podErrors.empty() && s.nodeErrors.empty() {
+			s.errMu.RUnlock()
+			break
+		}
+		changed := s.errorChanged
+		s.errMu.RUnlock()
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	s.healthMu.Lock()
 	s.synced = true
@@ -118,48 +194,57 @@ func (s *InformerSource) WaitForSync(ctx context.Context) error {
 func (s *InformerSource) LastError() error {
 	s.errMu.RLock()
 	defer s.errMu.RUnlock()
-	if s.podErr != nil {
-		return s.podErr
+	if err := s.podErrors.first(); err != nil {
+		return err
 	}
-	return s.nodeErr
+	return s.nodeErrors.first()
 }
 
-func (s *InformerSource) recordError(slot *error, err error) {
+func (s *InformerSource) recordError(errors *informerErrorSet, obj interface{}, err error) {
 	if err == nil {
 		return
 	}
+	key, resourceVersion, keyed := informerObjectMetadata(obj)
 	s.errMu.Lock()
-	if *slot == nil {
-		*slot = err
+	errors.record(key, resourceVersion, keyed, err)
+	s.signalErrorChangeLocked()
+	s.errMu.Unlock()
+}
+
+func (s *InformerSource) recordPodError(obj interface{}, err error) {
+	s.recordError(&s.podErrors, obj, err)
+}
+
+func (s *InformerSource) recordNodeError(obj interface{}, err error) {
+	s.recordError(&s.nodeErrors, obj, err)
+}
+
+func (s *InformerSource) clearError(errors *informerErrorSet, obj interface{}) {
+	key, _, keyed := informerObjectMetadata(obj)
+	if !keyed {
+		return
+	}
+	s.errMu.Lock()
+	if errors.clear(key, keyed) {
+		s.signalErrorChangeLocked()
 	}
 	s.errMu.Unlock()
 }
 
-func (s *InformerSource) recordPodError(err error) {
-	s.recordError(&s.podErr, err)
+func (s *InformerSource) clearPodError(obj interface{}) {
+	s.clearError(&s.podErrors, obj)
 }
 
-func (s *InformerSource) recordNodeError(err error) {
-	s.recordError(&s.nodeErr, err)
+func (s *InformerSource) clearNodeError(obj interface{}) {
+	s.clearError(&s.nodeErrors, obj)
 }
 
-func (s *InformerSource) clearError(slot *error) {
-	s.errMu.Lock()
-	defer s.errMu.Unlock()
-	s.healthMu.RLock()
-	synced := s.synced
-	s.healthMu.RUnlock()
-	if synced {
-		*slot = nil
+func (s *InformerSource) signalErrorChangeLocked() {
+	if s.errorChanged == nil {
+		s.errorChanged = make(chan struct{})
 	}
-}
-
-func (s *InformerSource) clearPodError() {
-	s.clearError(&s.podErr)
-}
-
-func (s *InformerSource) clearNodeError() {
-	s.clearError(&s.nodeErr)
+	close(s.errorChanged)
+	s.errorChanged = make(chan struct{})
 }
 
 func (s *InformerSource) addPod(obj interface{}) {
@@ -170,16 +255,17 @@ func (s *InformerSource) addPod(obj interface{}) {
 func (s *InformerSource) updatePod(oldObj, newObj interface{}) {
 	oldPod, err := podObject(oldObj)
 	if err != nil {
-		s.recordPodError(err)
+		s.recordPodError(oldObj, err)
 		return
 	}
 	newPod, err := podObject(newObj)
 	if err != nil {
-		s.recordPodError(err)
+		s.recordPodError(newObj, err)
 		return
 	}
 	if oldPod.UID != newPod.UID {
 		s.store.DeletePod(string(oldPod.UID))
+		s.clearPodError(oldPod)
 	}
 	s.upsertPod(newPod)
 	s.notifyPodEvent(oldObj, newObj)
@@ -188,28 +274,30 @@ func (s *InformerSource) updatePod(oldObj, newObj interface{}) {
 func (s *InformerSource) deletePod(obj interface{}) {
 	pod, err := podObject(obj)
 	if err != nil {
-		s.recordPodError(err)
+		s.recordPodError(obj, err)
 		return
 	}
 	s.store.DeletePod(string(pod.UID))
-	s.clearPodError()
+	s.clearPodError(pod)
 	s.notifyPodEvent(obj, nil)
 }
 
 func (s *InformerSource) upsertPod(obj interface{}) {
 	pod, err := podObject(obj)
-	if err == nil {
-		var snapshot endpoint.PodSnapshot
-		snapshot, err = podSnapshot(pod)
-		if err == nil {
-			err = s.store.UpsertPod(snapshot)
-		}
-	}
 	if err != nil {
-		s.recordPodError(err)
+		s.recordPodError(obj, err)
 		return
 	}
-	s.clearPodError()
+	snapshot, err := podSnapshot(pod)
+	if err != nil {
+		s.recordPodError(pod, err)
+		return
+	}
+	if err := s.store.UpsertPod(snapshot); err != nil {
+		s.recordPodError(pod, err)
+		return
+	}
+	s.clearPodError(pod)
 }
 
 func (s *InformerSource) addNode(obj interface{}) {
@@ -220,16 +308,17 @@ func (s *InformerSource) addNode(obj interface{}) {
 func (s *InformerSource) updateNode(oldObj, newObj interface{}) {
 	oldNode, err := nodeObject(oldObj)
 	if err != nil {
-		s.recordNodeError(err)
+		s.recordNodeError(oldObj, err)
 		return
 	}
 	newNode, err := nodeObject(newObj)
 	if err != nil {
-		s.recordNodeError(err)
+		s.recordNodeError(newObj, err)
 		return
 	}
 	if oldNode.UID != newNode.UID {
 		s.store.DeleteNode(oldNode.Name, string(oldNode.UID))
+		s.clearNodeError(oldNode)
 	}
 	s.upsertNode(newNode)
 	s.notifyNodeEvent(oldObj, newObj)
@@ -238,28 +327,67 @@ func (s *InformerSource) updateNode(oldObj, newObj interface{}) {
 func (s *InformerSource) deleteNode(obj interface{}) {
 	node, err := nodeObject(obj)
 	if err != nil {
-		s.recordNodeError(err)
+		s.recordNodeError(obj, err)
 		return
 	}
 	s.store.DeleteNode(node.Name, string(node.UID))
-	s.clearNodeError()
+	s.clearNodeError(node)
 	s.notifyNodeEvent(obj, nil)
 }
 
 func (s *InformerSource) upsertNode(obj interface{}) {
 	node, err := nodeObject(obj)
-	if err == nil {
-		var snapshot NodeSnapshot
-		snapshot, err = nodeSnapshot(node)
-		if err == nil {
-			err = s.store.UpsertNode(snapshot)
-		}
-	}
 	if err != nil {
-		s.recordNodeError(err)
+		s.recordNodeError(obj, err)
 		return
 	}
-	s.clearNodeError()
+	snapshot, err := nodeSnapshot(node)
+	if err != nil {
+		s.recordNodeError(node, err)
+		return
+	}
+	if err := s.store.UpsertNode(snapshot); err != nil {
+		s.recordNodeError(node, err)
+		return
+	}
+	s.clearNodeError(node)
+}
+
+func informerObjectMetadata(obj interface{}) (informerObjectKey, string, bool) {
+	var tombstoneKey string
+	switch value := obj.(type) {
+	case cache.DeletedFinalStateUnknown:
+		tombstoneKey, obj = value.Key, value.Obj
+	case *cache.DeletedFinalStateUnknown:
+		if value == nil {
+			return informerObjectKey{}, "", false
+		}
+		tombstoneKey, obj = value.Key, value.Obj
+	}
+	if accessor, err := apiMeta.Accessor(obj); err == nil {
+		key := informerObjectKey{namespace: accessor.GetNamespace(), name: accessor.GetName(), uid: string(accessor.GetUID())}
+		if key.name != "" || key.uid != "" {
+			return key, accessor.GetResourceVersion(), true
+		}
+	}
+	if tombstoneKey == "" {
+		return informerObjectKey{}, "", false
+	}
+	key, ok := informerObjectKeyFromCacheKey(tombstoneKey)
+	return key, "", ok
+}
+
+func informerObjectKeyFromCacheKey(value string) (informerObjectKey, bool) {
+	if namespace, name, ok := strings.Cut(value, "/"); ok {
+		if name == "" {
+			return informerObjectKey{}, false
+		}
+		return informerObjectKey{namespace: namespace, name: name}, true
+	}
+	if value == "" {
+		return informerObjectKey{}, false
+	}
+	return informerObjectKey{name: value}, true
 }
 
 func podObject(obj interface{}) (*corev1.Pod, error) {

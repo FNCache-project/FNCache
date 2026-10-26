@@ -32,7 +32,7 @@ func (d *EventDispatcher) deletePod(obj interface{})            { d.dispatchPod(
 func (d *EventDispatcher) dispatchPod(oldObj, newObj interface{}) {
 	oldPod, newPod, err := pairPods(oldObj, newObj)
 	if err != nil {
-		d.source.recordPodError(err)
+		d.source.recordPodError(podErrorObject(oldObj, newObj), err)
 		return
 	}
 	for _, key := range d.classifier.Pod(oldPod, newPod) {
@@ -47,12 +47,30 @@ func (d *EventDispatcher) deleteNode(obj interface{})            { d.dispatchNod
 func (d *EventDispatcher) dispatchNode(oldObj, newObj interface{}) {
 	oldNode, newNode, err := pairNodes(oldObj, newObj)
 	if err != nil {
-		d.source.recordNodeError(err)
+		d.source.recordNodeError(nodeErrorObject(oldObj, newObj), err)
 		return
 	}
 	for _, key := range d.classifier.Node(oldNode, newNode) {
 		d.queue.Add(key)
 	}
+}
+
+func podErrorObject(oldObj, newObj interface{}) interface{} {
+	if oldObj != nil {
+		if _, err := podObject(oldObj); err != nil {
+			return oldObj
+		}
+	}
+	return newObj
+}
+
+func nodeErrorObject(oldObj, newObj interface{}) interface{} {
+	if oldObj != nil {
+		if _, err := nodeObject(oldObj); err != nil {
+			return oldObj
+		}
+	}
+	return newObj
 }
 
 func pairPods(oldObj, newObj interface{}) (oldPod, newPod *corev1.Pod, err error) {
