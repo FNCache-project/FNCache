@@ -66,6 +66,11 @@ func TestLinuxConflictParsers(t *testing.T) {
 			rule: "-A FORWARD -j TOS --set-tos 0x01/0x01",
 			want: false,
 		},
+		{
+			name: "quoted comment containing option",
+			rule: "-A FORWARD -m comment --comment \"example --set-tos 0x0c/0x0c\" -j ACCEPT",
+			want: false,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

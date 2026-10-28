@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 type CommandRunner func(context.Context, string, ...string) ([]byte, error)
@@ -52,7 +53,7 @@ func validRouteOutput(output []byte) bool {
 
 func hasReservedTOSConflict(output []byte, markerChain, markerComment string) bool {
 	for _, raw := range strings.Split(string(output), "\n") {
-		line := strings.Join(strings.Fields(raw), " ")
+		line := strings.TrimSpace(raw)
 		if isMarkerRule(line, markerChain, markerComment) {
 			continue
 		}
@@ -64,9 +65,12 @@ func hasReservedTOSConflict(output []byte, markerChain, markerComment string) bo
 }
 
 func hasReservedTOSRuleValue(line string) bool {
-	fields := strings.Fields(strings.ToLower(line))
+	fields := splitRuleFields(strings.ToLower(line))
 	for index := 0; index < len(fields); index++ {
-		field := strings.Trim(fields[index], "\"'")
+		field := fields[index]
+		if strings.HasPrefix(field, "\"") || strings.HasPrefix(field, "'") {
+			continue
+		}
 		option, value, inline := strings.Cut(field, "=")
 		switch option {
 		case "--set-dscp", "--set-dscp-class":
@@ -92,6 +96,51 @@ func hasReservedTOSRuleValue(line string) bool {
 		}
 	}
 	return false
+}
+
+func splitRuleFields(line string) []string {
+	var fields []string
+	var field strings.Builder
+	var quote rune
+	escaped := false
+	appendField := func() {
+		if field.Len() == 0 {
+			return
+		}
+		fields = append(fields, field.String())
+		field.Reset()
+	}
+
+	for _, char := range line {
+		if escaped {
+			field.WriteRune(char)
+			escaped = false
+			continue
+		}
+		if quote != 0 {
+			field.WriteRune(char)
+			switch char {
+			case '\\':
+				escaped = true
+			case quote:
+				quote = 0
+			}
+			continue
+		}
+		switch char {
+		case '"', '\'':
+			quote = char
+			field.WriteRune(char)
+		default:
+			if unicode.IsSpace(char) {
+				appendField()
+				continue
+			}
+			field.WriteRune(char)
+		}
+	}
+	appendField()
+	return fields
 }
 
 func tosValueTouchesReservedBits(raw string) bool {
@@ -132,12 +181,12 @@ func isMarkerRule(line, markerChain, markerComment string) bool {
 	if markerChain == "" || markerComment == "" {
 		return isOncacheMarkerRule(line)
 	}
-	fields := strings.Fields(line)
+	fields := splitRuleFields(line)
 	return len(fields) == 18 && fields[1] == markerChain && strings.Trim(fields[5], "\"") == markerComment && markerRuleFieldsMatch(fields)
 }
 
 func isOncacheMarkerRule(line string) bool {
-	fields := strings.Fields(line)
+	fields := splitRuleFields(line)
 	return len(fields) == 18 && fields[1] == "ONCACHE" && strings.HasPrefix(strings.Trim(fields[5], "\""), "oncache:") && markerRuleFieldsMatch(fields)
 }
 
