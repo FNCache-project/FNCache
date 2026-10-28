@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/cat-cc-Lcos/FNCache/internal/discovery"
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
+	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/discovery"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 )
 
 type generationControl struct {
@@ -79,7 +79,7 @@ func TestGenerationTransactionOrdersDisableMutateVerifyAndPublish(t *testing.T) 
 
 func TestGenerationTransactionStopsBeforeMutationWhenEndpointScanIsIncomplete(t *testing.T) {
 	desired := publishTestDesired()
-	desired.EndpointScanSkipped = map[string]string{"pod-skipped": resolver.ErrEndpointNotReady.Error()}
+	desired.EndpointScanSkipped = map[string]string{"pod-skipped": endpoint.ErrEndpointNotReady.Error()}
 	actual := publishTestActual(desired)
 	events := []string{}
 	transaction := newGenerationTransaction(t, &events, actual, actual)
@@ -100,7 +100,7 @@ func TestGenerationTransactionStopsBeforeMutationWhenEndpointScanIsIncomplete(t 
 func TestGenerationTransactionStopsBeforeMutationWhenActualScanIsIncomplete(t *testing.T) {
 	desired := publishTestDesired()
 	before := publishTestActual(desired)
-	before.EndpointScanSkipped = map[string]string{"pod-skipped": resolver.ErrEndpointNotReady.Error()}
+	before.EndpointScanSkipped = map[string]string{"pod-skipped": endpoint.ErrEndpointNotReady.Error()}
 	events := []string{}
 	transaction := newGenerationTransaction(t, &events, before, publishTestActual(desired))
 

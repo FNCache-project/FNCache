@@ -6,11 +6,11 @@ import (
 	"testing"
 
 	"github.com/cat-cc-Lcos/FNCache/internal/controlplane"
-	"github.com/cat-cc-Lcos/FNCache/internal/discovery"
-	"github.com/cat-cc-Lcos/FNCache/internal/kube"
-	"github.com/cat-cc-Lcos/FNCache/internal/overlay/flannel"
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
+	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/discovery"
+	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/flannel"
+	"github.com/cat-cc-Lcos/FNCache/internal/kubernetes"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 )
 
 type dynamicObserverPreflight struct{}
@@ -22,34 +22,34 @@ func (dynamicObserverPreflight) Check(context.Context, discovery.PreflightReques
 type dynamicObserverFlannel struct{}
 
 func (dynamicObserverFlannel) Discover(context.Context, flannel.DiscoveryRequest) (flannel.FlannelConfig, error) {
-	return flannel.FlannelConfig{BackendType: "vxlan", VXLANLink: resolver.LinkIdentity{IfIndex: 9, IfName: "flannel.1"}, UnderlayLink: resolver.LinkIdentity{IfIndex: 2, IfName: "eth0", MAC: []byte{1, 2, 3, 4, 5, 6}}, UnderlayIPv4: netip.MustParseAddr("192.0.2.10"), PodCIDR: netip.MustParsePrefix("10.42.0.0/24"), VNI: 1, UDPPort: 8472, MTU: 1450, MissMask: 0x04, EstablishedMask: 0x08, IPTablesBackend: "iptables-nft", Fingerprint: "dynamic"}, nil
+	return flannel.FlannelConfig{BackendType: "vxlan", VXLANLink: endpoint.LinkIdentity{IfIndex: 9, IfName: "flannel.1"}, UnderlayLink: endpoint.LinkIdentity{IfIndex: 2, IfName: "eth0", MAC: []byte{1, 2, 3, 4, 5, 6}}, UnderlayIPv4: netip.MustParseAddr("192.0.2.10"), PodCIDR: netip.MustParsePrefix("10.42.0.0/24"), VNI: 1, UDPPort: 8472, MTU: 1450, MissMask: 0x04, EstablishedMask: 0x08, IPTablesBackend: "iptables-nft", Fingerprint: "dynamic"}, nil
 }
 
 type dynamicObserverEndpoints struct{}
 
-func (dynamicObserverEndpoints) Scan(context.Context, []resolver.PodSnapshot) (resolver.EndpointScanResult, error) {
-	return resolver.EndpointScanResult{Endpoints: map[string]resolver.Endpoint{"pod-local": {Pod: resolver.PodIdentity{Namespace: "default", Name: "local", UID: "pod-local"}, Node: resolver.NodeIdentity{Name: "node-a"}, PodIPv4: netip.MustParseAddr("10.42.0.2"), NetNSInode: 42, PeerLink: resolver.LinkIdentity{NetNSInode: 42, IfIndex: 7}, HostLink: resolver.LinkIdentity{IfIndex: 8}}}}, nil
+func (dynamicObserverEndpoints) Scan(context.Context, []endpoint.PodSnapshot) (endpoint.EndpointScanResult, error) {
+	return endpoint.EndpointScanResult{Endpoints: map[string]endpoint.Endpoint{"pod-local": {Pod: endpoint.PodIdentity{Namespace: "default", Name: "local", UID: "pod-local"}, Node: endpoint.NodeIdentity{Name: "node-a"}, PodIPv4: netip.MustParseAddr("10.42.0.2"), NetNSInode: 42, PeerLink: endpoint.LinkIdentity{NetNSInode: 42, IfIndex: 7}, HostLink: endpoint.LinkIdentity{IfIndex: 8}}}}, nil
 }
 
 type dynamicObserverSkippedEndpoints struct{}
 
-func (dynamicObserverSkippedEndpoints) Scan(context.Context, []resolver.PodSnapshot) (resolver.EndpointScanResult, error) {
-	return resolver.EndpointScanResult{Skipped: map[string]error{"pod-local": resolver.ErrEndpointNotReady}}, nil
+func (dynamicObserverSkippedEndpoints) Scan(context.Context, []endpoint.PodSnapshot) (endpoint.EndpointScanResult, error) {
+	return endpoint.EndpointScanResult{Skipped: map[string]error{"pod-local": endpoint.ErrEndpointNotReady}}, nil
 }
 
 type dynamicObserverTerminalEndpoints struct{}
 
-func (dynamicObserverTerminalEndpoints) Scan(_ context.Context, pods []resolver.PodSnapshot) (resolver.EndpointScanResult, error) {
-	result := resolver.EndpointScanResult{Endpoints: make(map[string]resolver.Endpoint), Skipped: make(map[string]error)}
+func (dynamicObserverTerminalEndpoints) Scan(_ context.Context, pods []endpoint.PodSnapshot) (endpoint.EndpointScanResult, error) {
+	result := endpoint.EndpointScanResult{Endpoints: make(map[string]endpoint.Endpoint), Skipped: make(map[string]error)}
 	for _, pod := range pods {
 		if pod.Identity.UID != "pod-local" {
 			continue
 		}
 		if pod.Phase == "Running" {
-			result.Endpoints[pod.Identity.UID] = resolver.Endpoint{Pod: pod.Identity, Node: resolver.NodeIdentity{Name: pod.NodeName}, PodIPv4: pod.PodIPv4, NetNSInode: 42, PeerLink: resolver.LinkIdentity{NetNSInode: 42, IfIndex: 7}, HostLink: resolver.LinkIdentity{IfIndex: 8}}
+			result.Endpoints[pod.Identity.UID] = endpoint.Endpoint{Pod: pod.Identity, Node: endpoint.NodeIdentity{Name: pod.NodeName}, PodIPv4: pod.PodIPv4, NetNSInode: 42, PeerLink: endpoint.LinkIdentity{NetNSInode: 42, IfIndex: 7}, HostLink: endpoint.LinkIdentity{IfIndex: 8}}
 			continue
 		}
-		result.Skipped[pod.Identity.UID] = resolver.ErrEndpointNotReady
+		result.Skipped[pod.Identity.UID] = endpoint.ErrEndpointNotReady
 	}
 	return result, nil
 }
@@ -61,12 +61,12 @@ func (dynamicObserverPins) Scan(context.Context) (reconcile.ActualState, error) 
 }
 
 type dynamicObserverTC struct {
-	links *[]resolver.LinkIdentity
+	links *[]endpoint.LinkIdentity
 }
 
-func (t dynamicObserverTC) Scan(_ context.Context, links []resolver.LinkIdentity) (reconcile.ActualState, error) {
+func (t dynamicObserverTC) Scan(_ context.Context, links []endpoint.LinkIdentity) (reconcile.ActualState, error) {
 	if t.links != nil {
-		*t.links = append([]resolver.LinkIdentity(nil), links...)
+		*t.links = append([]endpoint.LinkIdentity(nil), links...)
 	}
 	return reconcile.ActualState{}, nil
 }
@@ -79,20 +79,20 @@ func (dynamicObserverRules) Scan(_ context.Context, spec flannel.MarkerRuleSpec)
 
 func TestDynamicObserverBuildsLatestDesiredAndActualState(t *testing.T) {
 	cfg := dynamicTestConfig()
-	store := kube.NewSnapshotStore()
-	if err := store.UpsertNode(kube.NodeSnapshot{Identity: resolver.NodeIdentity{Name: "node-a", UID: "node-a"}}); err != nil {
+	store := kubernetes.NewSnapshotStore()
+	if err := store.UpsertNode(kubernetes.NodeSnapshot{Identity: endpoint.NodeIdentity{Name: "node-a", UID: "node-a"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.UpsertNode(kube.NodeSnapshot{Identity: resolver.NodeIdentity{Name: "node-b", UID: "node-b"}, InternalIPv4: netip.MustParseAddr("192.0.2.11")}); err != nil {
+	if err := store.UpsertNode(kubernetes.NodeSnapshot{Identity: endpoint.NodeIdentity{Name: "node-b", UID: "node-b"}, InternalIPv4: netip.MustParseAddr("192.0.2.11")}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.UpsertPod(resolver.PodSnapshot{Identity: resolver.PodIdentity{Namespace: "default", Name: "local", UID: "pod-local"}, NodeName: "node-a", PodIPv4: netip.MustParseAddr("10.42.0.2"), Phase: "Running"}); err != nil {
+	if err := store.UpsertPod(endpoint.PodSnapshot{Identity: endpoint.PodIdentity{Namespace: "default", Name: "local", UID: "pod-local"}, NodeName: "node-a", PodIPv4: netip.MustParseAddr("10.42.0.2"), Phase: "Running"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.UpsertPod(resolver.PodSnapshot{Identity: resolver.PodIdentity{Namespace: "default", Name: "remote", UID: "pod-remote"}, NodeName: "node-b", PodIPv4: netip.MustParseAddr("10.42.1.2"), Phase: "Running"}); err != nil {
+	if err := store.UpsertPod(endpoint.PodSnapshot{Identity: endpoint.PodIdentity{Namespace: "default", Name: "remote", UID: "pod-remote"}, NodeName: "node-b", PodIPv4: netip.MustParseAddr("10.42.1.2"), Phase: "Running"}); err != nil {
 		t.Fatal(err)
 	}
-	var scannedLinks []resolver.LinkIdentity
+	var scannedLinks []endpoint.LinkIdentity
 	tc := dynamicObserverTC{links: &scannedLinks}
 	sources := controlplane.Sources{Preflight: dynamicObserverPreflight{}, Flannel: dynamicObserverFlannel{}, Endpoints: dynamicObserverEndpoints{}, Pins: dynamicObserverPins{}, TC: tc, Rules: dynamicObserverRules{}}
 	observer, err := NewDynamicObserver(cfg, store, sources)
@@ -118,8 +118,8 @@ func TestDynamicObserverBuildsLatestDesiredAndActualState(t *testing.T) {
 }
 func TestDynamicObserverScanPropagatesEndpointScanSkipped(t *testing.T) {
 	cfg := dynamicTestConfig()
-	store := kube.NewSnapshotStore()
-	if err := store.UpsertNode(kube.NodeSnapshot{Identity: resolver.NodeIdentity{Name: "node-a", UID: "node-a"}}); err != nil {
+	store := kubernetes.NewSnapshotStore()
+	if err := store.UpsertNode(kubernetes.NodeSnapshot{Identity: endpoint.NodeIdentity{Name: "node-a", UID: "node-a"}}); err != nil {
 		t.Fatal(err)
 	}
 	sources := controlplane.Sources{Preflight: dynamicObserverPreflight{}, Flannel: dynamicObserverFlannel{}, Endpoints: dynamicObserverSkippedEndpoints{}, Pins: dynamicObserverPins{}, TC: dynamicObserverTC{}, Rules: dynamicObserverRules{}}
@@ -131,22 +131,22 @@ func TestDynamicObserverScanPropagatesEndpointScanSkipped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reason := actual.EndpointScanSkipped["pod-local"]; reason != resolver.ErrEndpointNotReady.Error() {
+	if reason := actual.EndpointScanSkipped["pod-local"]; reason != endpoint.ErrEndpointNotReady.Error() {
 		t.Fatalf("dynamic actual scan lost endpoint skip: got=%q", reason)
 	}
 }
 
 func TestDynamicObserverRetainsSkippedEndpointLinksForActualScan(t *testing.T) {
 	cfg := dynamicTestConfig()
-	store := kube.NewSnapshotStore()
-	if err := store.UpsertNode(kube.NodeSnapshot{Identity: resolver.NodeIdentity{Name: "node-a", UID: "node-a"}}); err != nil {
+	store := kubernetes.NewSnapshotStore()
+	if err := store.UpsertNode(kubernetes.NodeSnapshot{Identity: endpoint.NodeIdentity{Name: "node-a", UID: "node-a"}}); err != nil {
 		t.Fatal(err)
 	}
-	pod := resolver.PodSnapshot{Identity: resolver.PodIdentity{Namespace: "default", Name: "local", UID: "pod-local"}, NodeName: "node-a", PodIPv4: netip.MustParseAddr("10.42.0.2"), Phase: "Running"}
+	pod := endpoint.PodSnapshot{Identity: endpoint.PodIdentity{Namespace: "default", Name: "local", UID: "pod-local"}, NodeName: "node-a", PodIPv4: netip.MustParseAddr("10.42.0.2"), Phase: "Running"}
 	if err := store.UpsertPod(pod); err != nil {
 		t.Fatal(err)
 	}
-	var scannedLinks []resolver.LinkIdentity
+	var scannedLinks []endpoint.LinkIdentity
 	sources := controlplane.Sources{Preflight: dynamicObserverPreflight{}, Flannel: dynamicObserverFlannel{}, Endpoints: dynamicObserverTerminalEndpoints{}, Pins: dynamicObserverPins{}, TC: dynamicObserverTC{links: &scannedLinks}, Rules: dynamicObserverRules{}}
 	observer, err := NewDynamicObserver(cfg, store, sources)
 	if err != nil {

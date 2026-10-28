@@ -6,14 +6,14 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/cat-cc-Lcos/FNCache/internal/kube"
+	"github.com/cat-cc-Lcos/FNCache/internal/kubernetes"
 )
 
 var ErrKubernetesAPIStale = errors.New("kubernetes API is stale")
 
 type APIHealthSource interface {
 	ProbeAPI(context.Context) error
-	Health() kube.APIHealth
+	Health() kubernetes.APIHealth
 }
 
 type APIHealthMonitorConfig struct {

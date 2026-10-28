@@ -7,8 +7,8 @@ import (
 	"os"
 	"testing"
 
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 )
 
 type backendObserver struct {
@@ -85,12 +85,12 @@ func (f *backendEnsurer) EnsureBase(context.Context, reconcile.DesiredState, rec
 	return true, f.err
 }
 
-func (f *backendEnsurer) EnsureEndpoint(context.Context, reconcile.DesiredState, reconcile.ActualState, resolver.Endpoint) (bool, error) {
+func (f *backendEnsurer) EnsureEndpoint(context.Context, reconcile.DesiredState, reconcile.ActualState, endpoint.Endpoint) (bool, error) {
 	f.calls++
 	return true, f.err
 }
 
-func (f *backendEnsurer) EnsureEndpointMaps(context.Context, reconcile.DesiredState, reconcile.ActualState, resolver.Endpoint, bool) (bool, error) {
+func (f *backendEnsurer) EnsureEndpointMaps(context.Context, reconcile.DesiredState, reconcile.ActualState, endpoint.Endpoint, bool) (bool, error) {
 	f.calls++
 	return true, f.err
 }
@@ -271,7 +271,7 @@ func TestFirstPassBackendLeavesUnsupportedNodeDisabled(t *testing.T) {
 
 func TestFirstPassBackendPreservesOwnershipWhenEndpointScanIsIncomplete(t *testing.T) {
 	desired := publishTestDesired()
-	desired.EndpointScanSkipped = map[string]string{"pod-skipped": resolver.ErrEndpointNotReady.Error()}
+	desired.EndpointScanSkipped = map[string]string{"pod-skipped": endpoint.ErrEndpointNotReady.Error()}
 	owned := reconcile.OwnedEndpoint{PodUID: "pod-old", PodIPv4: netip.MustParseAddr("10.244.1.11"), NetNSInode: 43, PeerIfIndex: 11, HostIfIndex: 21}
 	store := &fakeOwnershipCommitter{events: new([]string), state: reconcile.OwnershipState{
 		SchemaVersion: 1, InstallationID: "install-a", NodeUID: "node-a", ELFBuildID: "sha256:build", ABI: reconcile.BPFABIVersion,
@@ -311,7 +311,7 @@ func TestFirstPassBackendPreservesOwnershipWhenEndpointScanIsIncomplete(t *testi
 func TestFirstPassBackendStopsBeforeMutationWhenActualScanIsIncomplete(t *testing.T) {
 	desired := publishTestDesired()
 	actual := publishTestActual(desired)
-	actual.EndpointScanSkipped = map[string]string{"pod-skipped": resolver.ErrEndpointNotReady.Error()}
+	actual.EndpointScanSkipped = map[string]string{"pod-skipped": endpoint.ErrEndpointNotReady.Error()}
 	store := &fakeOwnershipCommitter{events: new([]string)}
 	publisher, err := NewPublisher(store, &fakeControlPublisher{events: store.events}, publishTestConfig())
 	if err != nil {
@@ -344,7 +344,7 @@ func TestFirstPassBackendStopsBeforeDownstreamMutationWhenRescanIsIncomplete(t *
 	desired := publishTestDesired()
 	first := publishTestActual(desired)
 	second := publishTestActual(desired)
-	second.EndpointScanSkipped = map[string]string{"pod-skipped": resolver.ErrEndpointNotReady.Error()}
+	second.EndpointScanSkipped = map[string]string{"pod-skipped": endpoint.ErrEndpointNotReady.Error()}
 	observer := &backendObserver{desired: desired, actualSequence: []reconcile.ActualState{first, second}}
 	store := &fakeOwnershipCommitter{events: new([]string)}
 	publisher, err := NewPublisher(store, &fakeControlPublisher{events: store.events}, publishTestConfig())

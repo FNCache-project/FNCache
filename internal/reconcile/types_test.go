@@ -6,18 +6,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 )
 
 func TestEndpointValidate(t *testing.T) {
-	endpoint := resolver.Endpoint{
-		Pod:        resolver.PodIdentity{UID: "pod-1"},
-		Node:       resolver.NodeIdentity{Name: "node-a"},
+	endpoint := endpoint.Endpoint{
+		Pod:        endpoint.PodIdentity{UID: "pod-1"},
+		Node:       endpoint.NodeIdentity{Name: "node-a"},
 		PodIPv4:    netip.MustParseAddr("10.244.1.2"),
 		NetNSInode: 42,
-		PeerLink:   resolver.LinkIdentity{IfIndex: 2},
-		HostLink:   resolver.LinkIdentity{IfIndex: 3},
+		PeerLink:   endpoint.LinkIdentity{IfIndex: 2},
+		HostLink:   endpoint.LinkIdentity{IfIndex: 3},
 	}
 	if err := endpoint.Validate(); err != nil {
 		t.Fatal(err)

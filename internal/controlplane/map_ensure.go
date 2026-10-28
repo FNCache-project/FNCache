@@ -8,8 +8,8 @@ import (
 	"sort"
 
 	"github.com/cat-cc-Lcos/FNCache/internal/datapath"
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 )
 
 type MapStore interface {
@@ -32,7 +32,7 @@ func NewMapEnsurerWithSchema(store MapStore, schema datapath.CollectionSchema) (
 	return &MapEnsurer{store: store, schema: schema}, nil
 }
 
-func (e *MapEnsurer) EnsureEndpointMaps(ctx context.Context, desired reconcile.DesiredState, actual reconcile.ActualState, endpoint resolver.Endpoint, fastPathDisabled bool) (bool, error) {
+func (e *MapEnsurer) EnsureEndpointMaps(ctx context.Context, desired reconcile.DesiredState, actual reconcile.ActualState, endpoint endpoint.Endpoint, fastPathDisabled bool) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
@@ -166,7 +166,7 @@ func mapSchema(schema datapath.CollectionSchema, name string) (datapath.MapSchem
 	return datapath.MapSchema{}, false
 }
 
-func encodeIngressEntry(endpoint resolver.Endpoint) ([]byte, []byte) {
+func encodeIngressEntry(endpoint endpoint.Endpoint) ([]byte, []byte) {
 	key := endpoint.PodIPv4.As4()
 	value := make([]byte, 16)
 	binary.NativeEndian.PutUint32(value[:4], uint32(endpoint.HostLink.IfIndex))
@@ -175,7 +175,7 @@ func encodeIngressEntry(endpoint resolver.Endpoint) ([]byte, []byte) {
 	return key[:], value
 }
 
-func encodeDeviceEntry(link resolver.LinkIdentity, ip netip.Addr) ([]byte, []byte) {
+func encodeDeviceEntry(link endpoint.LinkIdentity, ip netip.Addr) ([]byte, []byte) {
 	key := make([]byte, 4)
 	binary.NativeEndian.PutUint32(key, uint32(link.IfIndex))
 	value := make([]byte, 12)

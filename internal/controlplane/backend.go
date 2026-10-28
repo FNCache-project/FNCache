@@ -7,8 +7,8 @@ import (
 	"os"
 	"sort"
 
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 )
 
 type observationBackend interface {
@@ -29,11 +29,11 @@ type baseEnsurer interface {
 }
 
 type endpointEnsurer interface {
-	EnsureEndpoint(context.Context, reconcile.DesiredState, reconcile.ActualState, resolver.Endpoint) (bool, error)
+	EnsureEndpoint(context.Context, reconcile.DesiredState, reconcile.ActualState, endpoint.Endpoint) (bool, error)
 }
 
 type endpointMapEnsurer interface {
-	EnsureEndpointMaps(context.Context, reconcile.DesiredState, reconcile.ActualState, resolver.Endpoint, bool) (bool, error)
+	EnsureEndpointMaps(context.Context, reconcile.DesiredState, reconcile.ActualState, endpoint.Endpoint, bool) (bool, error)
 }
 
 type fastPathDisabler interface {
@@ -244,7 +244,7 @@ func (b *FirstPassBackend) cleanupStaleEndpoints(ctx context.Context, desired re
 	return changed, nil
 }
 
-func sameOwnedEndpoint(endpoint resolver.Endpoint, owned reconcile.OwnedEndpoint) bool {
+func sameOwnedEndpoint(endpoint endpoint.Endpoint, owned reconcile.OwnedEndpoint) bool {
 	return endpoint.Pod.UID == owned.PodUID && endpoint.PodIPv4 == owned.PodIPv4 && endpoint.NetNSInode == owned.NetNSInode &&
 		endpoint.PeerLink.IfIndex == owned.PeerIfIndex && endpoint.HostLink.IfIndex == owned.HostIfIndex
 }

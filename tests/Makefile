@@ -14,7 +14,7 @@ REDIRECT_OBJ := $(BUILD_DIR)/bpf-fail-redirect/tc_prog_kern.o
 INTEGRATION_BUILD_DIR ?= $(BUILD_DIR)/m2-integration
 INTEGRATION_BPF_OBJ := $(INTEGRATION_BUILD_DIR)/bpf/tc_prog_kern.o
 
-.PHONY: all test test-bpf test-m2-integration test-m2-local-runtime helm-lint helm-template clean
+.PHONY: all test test-bpf test-m2-integration test-m2-local-runtime helm-lint helm-template helm-test clean
 
 all: $(TARGET)
 
@@ -81,6 +81,36 @@ helm-lint:
 helm-template:
 	command -v "$(HELM)" >/dev/null
 	"$(HELM)" template oncache "$(CHART_DIR)"
+
+helm-test:
+	command -v "$(HELM)" >/dev/null
+	@set -eu; \
+	rendered="$$(mktemp)"; \
+	trap 'rm -f "$$rendered"' EXIT; \
+	"$(HELM)" template oncache "$(CHART_DIR)" \
+		--set config.server.listenAddress=:9191 \
+		--set metrics.port=9191 \
+		--set metrics.enabled=true >"$$rendered"; \
+	grep -Fq 'listenAddress: ":9191"' "$$rendered"; \
+	grep -Fq 'containerPort: 9191' "$$rendered"; \
+	grep -Fq '      port: 9191' "$$rendered"; \
+	grep -Fq 'targetPort: http' "$$rendered"; \
+	"$(HELM)" template oncache "$(CHART_DIR)" \
+		--set 'config.server.listenAddress=[::1]:9191' \
+		--set metrics.port=9191 >/dev/null; \
+	if "$(HELM)" template oncache "$(CHART_DIR)" \
+		--set config.server.listenAddress=:9191 \
+		--set metrics.port=9090 \
+		--set metrics.enabled=true >/dev/null 2>&1; then \
+		echo "expected mismatched HTTP ports to fail Helm rendering"; \
+		exit 1; \
+	fi; \
+	if "$(HELM)" template oncache "$(CHART_DIR)" \
+		--set config.server.listenAddress=::1 \
+		--set metrics.port=1 >/dev/null 2>&1; then \
+		echo "expected raw IPv6 listen address without a port to fail Helm rendering"; \
+		exit 1; \
+	fi
 
 clean:
 	rm -f "$(TARGET)" "$(BEHAVIOR_TARGET)"

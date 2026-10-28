@@ -6,8 +6,8 @@ import (
 	"fmt"
 
 	"github.com/cat-cc-Lcos/FNCache/internal/datapath"
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 )
 
 type EndpointEnsurer struct {
@@ -21,18 +21,18 @@ func NewEndpointEnsurer(tc *datapath.TCManager) (*EndpointEnsurer, error) {
 	return &EndpointEnsurer{tc: tc}, nil
 }
 
-func (e *EndpointEnsurer) EnsureEndpoint(ctx context.Context, desired reconcile.DesiredState, actual reconcile.ActualState, endpoint resolver.Endpoint) (bool, error) {
+func (e *EndpointEnsurer) EnsureEndpoint(ctx context.Context, desired reconcile.DesiredState, actual reconcile.ActualState, resolvedEndpoint endpoint.Endpoint) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
 	if !desired.Enabled {
 		return false, nil
 	}
-	expected, ok := desired.LocalEndpoints[endpoint.Pod.UID]
-	if !ok || !sameEndpointIdentity(expected, endpoint) {
-		return false, fmt.Errorf("endpoint is not the current desired identity: %s", endpoint.Pod.UID)
+	expected, ok := desired.LocalEndpoints[resolvedEndpoint.Pod.UID]
+	if !ok || !sameEndpointIdentity(expected, resolvedEndpoint) {
+		return false, fmt.Errorf("endpoint is not the current desired identity: %s", resolvedEndpoint.Pod.UID)
 	}
-	if err := endpoint.Validate(); err != nil {
+	if err := resolvedEndpoint.Validate(); err != nil {
 		return false, fmt.Errorf("validate endpoint: %w", err)
 	}
 
@@ -50,10 +50,10 @@ func (e *EndpointEnsurer) EnsureEndpoint(ctx context.Context, desired reconcile.
 
 	attachments := []struct {
 		program string
-		link    resolver.LinkIdentity
+		link    endpoint.LinkIdentity
 	}{
-		{program: "tc_init_in", link: endpoint.PeerLink},
-		{program: "tc_masq", link: endpoint.HostLink},
+		{program: "tc_init_in", link: resolvedEndpoint.PeerLink},
+		{program: "tc_masq", link: resolvedEndpoint.HostLink},
 	}
 	changed := false
 	for _, attachment := range attachments {
@@ -71,13 +71,13 @@ func (e *EndpointEnsurer) EnsureEndpoint(ctx context.Context, desired reconcile.
 	return changed, nil
 }
 
-func sameEndpointIdentity(expected, actual resolver.Endpoint) bool {
+func sameEndpointIdentity(expected, actual endpoint.Endpoint) bool {
 	return expected.Pod == actual.Pod && expected.Node == actual.Node && expected.PodIPv4 == actual.PodIPv4 &&
 		expected.NetNSInode == actual.NetNSInode && sameLinkIdentity(expected.PeerLink, actual.PeerLink) &&
 		sameLinkIdentity(expected.HostLink, actual.HostLink)
 }
 
-func sameLinkIdentity(expected, actual resolver.LinkIdentity) bool {
+func sameLinkIdentity(expected, actual endpoint.LinkIdentity) bool {
 	return expected.NetNSInode == actual.NetNSInode && expected.IfIndex == actual.IfIndex &&
 		expected.IfName == actual.IfName && bytes.Equal(expected.MAC, actual.MAC)
 }

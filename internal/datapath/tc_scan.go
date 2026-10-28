@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/cat-cc-Lcos/FNCache/internal/discovery"
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
+	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/discovery"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 	"github.com/vishvananda/netlink"
 )
 
@@ -24,7 +24,7 @@ func NewTCScanner(manager *TCManager) (*TCScanner, error) {
 	return &TCScanner{manager: manager, now: time.Now}, nil
 }
 
-func (s *TCScanner) Scan(ctx context.Context, links []resolver.LinkIdentity) (reconcile.ActualState, error) {
+func (s *TCScanner) Scan(ctx context.Context, links []endpoint.LinkIdentity) (reconcile.ActualState, error) {
 	actual := reconcile.ActualState{ScannedAt: s.now()}
 	seen := make(map[struct {
 		ns    uint64

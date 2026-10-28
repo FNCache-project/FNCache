@@ -15,9 +15,9 @@ import (
 
 	"github.com/cat-cc-Lcos/FNCache/internal/controlplane"
 	"github.com/cat-cc-Lcos/FNCache/internal/datapath"
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
 	"github.com/cat-cc-Lcos/FNCache/internal/ownership"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 	"github.com/cilium/ebpf"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
@@ -180,7 +180,7 @@ func TestTCBackendTargetsPodNetns(t *testing.T) {
 	defer os.RemoveAll(pinRoot)
 
 	before := currentNetNSInode(t)
-	var podLink resolver.LinkIdentity
+	var podLink endpoint.LinkIdentity
 	if err := lab.withNetNS(func(context.Context) error {
 		var err error
 		podLink, err = linkIdentity(lab.underlay, lab.netnsInode, lab.path)
@@ -279,7 +279,7 @@ type integrationObserver struct {
 	desired reconcile.DesiredState
 	pins    *datapath.PinScanner
 	tc      *datapath.TCScanner
-	links   []resolver.LinkIdentity
+	links   []endpoint.LinkIdentity
 }
 
 func (o *integrationObserver) Discover(context.Context) (reconcile.DesiredState, error) {
@@ -386,7 +386,7 @@ func (c *integrationControl) Publish(ctx context.Context, generation, heartbeatN
 	return c.writer.Publish(ctx, generation, heartbeatNS, heartbeatTimeoutNS, flags, vxlanVNI, vxlanUDPPort)
 }
 
-func newFirstPassRuntime(t *testing.T, elf, pinRoot, statePath string, desired reconcile.DesiredState, link resolver.LinkIdentity) *firstPassRuntime {
+func newFirstPassRuntime(t *testing.T, elf, pinRoot, statePath string, desired reconcile.DesiredState, link endpoint.LinkIdentity) *firstPassRuntime {
 	t.Helper()
 	backend, err := datapath.NewLinuxTCBackend(pinRoot)
 	if err != nil {
@@ -404,7 +404,7 @@ func newFirstPassRuntime(t *testing.T, elf, pinRoot, statePath string, desired r
 	if err != nil {
 		t.Fatal(err)
 	}
-	observer := &integrationObserver{desired: desired, pins: pins, tc: tcScanner, links: []resolver.LinkIdentity{link}}
+	observer := &integrationObserver{desired: desired, pins: pins, tc: tcScanner, links: []endpoint.LinkIdentity{link}}
 	controlWriter, err := datapath.NewControlWriter(pinRoot)
 	if err != nil {
 		t.Fatal(err)
@@ -540,7 +540,7 @@ func (l *netNSLab) withNetNS(fn func(context.Context) error) error {
 	return manager.WithNetNS(context.Background(), datapath.NetNSRef{Path: l.path, Inode: l.netnsInode}, fn)
 }
 
-func baseDesired(link resolver.LinkIdentity) reconcile.DesiredState {
+func baseDesired(link endpoint.LinkIdentity) reconcile.DesiredState {
 	return reconcile.DesiredState{
 		Enabled:  true,
 		Datapath: reconcile.DatapathSpec{VXLANVNI: 1, VXLANUDPPort: 8472},
@@ -548,16 +548,16 @@ func baseDesired(link resolver.LinkIdentity) reconcile.DesiredState {
 	}
 }
 
-func linkIdentity(name string, netnsInode uint64, netnsPath string) (resolver.LinkIdentity, error) {
+func linkIdentity(name string, netnsInode uint64, netnsPath string) (endpoint.LinkIdentity, error) {
 	link, err := netlink.LinkByName(name)
 	if err != nil {
-		return resolver.LinkIdentity{}, err
+		return endpoint.LinkIdentity{}, err
 	}
 	attrs := link.Attrs()
 	if attrs == nil || attrs.Index <= 0 {
-		return resolver.LinkIdentity{}, fmt.Errorf("link identity is incomplete: %s", name)
+		return endpoint.LinkIdentity{}, fmt.Errorf("link identity is incomplete: %s", name)
 	}
-	return resolver.LinkIdentity{NetNSInode: netnsInode, NetNSPath: netnsPath, IfIndex: attrs.Index, IfName: attrs.Name, MAC: append([]byte(nil), attrs.HardwareAddr...)}, nil
+	return endpoint.LinkIdentity{NetNSInode: netnsInode, NetNSPath: netnsPath, IfIndex: attrs.Index, IfName: attrs.Name, MAC: append([]byte(nil), attrs.HardwareAddr...)}, nil
 }
 
 func currentNetNSInode(t *testing.T) uint64 {

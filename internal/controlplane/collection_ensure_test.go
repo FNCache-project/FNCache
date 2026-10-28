@@ -14,7 +14,7 @@ import (
 	"testing"
 
 	"github.com/cat-cc-Lcos/FNCache/internal/datapath"
-	"github.com/cat-cc-Lcos/FNCache/internal/discovery"
+	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/discovery"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/asm"

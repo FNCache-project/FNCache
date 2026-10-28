@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"github.com/cat-cc-Lcos/FNCache/internal/datapath"
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 )
 
 type EndpointMapRemover interface {
@@ -125,7 +125,7 @@ func desiredClaimsEndpointLink(desired reconcile.DesiredState, actual reconcile.
 }
 
 func (r *EndpointRemover) removeFilter(ctx context.Context, actual reconcile.ActualState, program string, ifindex int, netnsInode uint64) error {
-	identity, err := datapath.NewFixedFilter(resolver.LinkIdentity{IfIndex: ifindex, NetNSInode: netnsInode}, program, 1, true)
+	identity, err := datapath.NewFixedFilter(endpoint.LinkIdentity{IfIndex: ifindex, NetNSInode: netnsInode}, program, 1, true)
 	if err != nil {
 		return err
 	}

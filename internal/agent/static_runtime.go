@@ -9,10 +9,10 @@ import (
 
 	"github.com/cat-cc-Lcos/FNCache/internal/controlplane"
 	"github.com/cat-cc-Lcos/FNCache/internal/datapath"
-	"github.com/cat-cc-Lcos/FNCache/internal/discovery"
-	"github.com/cat-cc-Lcos/FNCache/internal/overlay/flannel"
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
+	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/discovery"
+	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/flannel"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 )
 
 type StaticRuntimeConfig struct {
@@ -28,14 +28,14 @@ type StaticRuntimeConfig struct {
 	Preflight          discovery.PreflightRequest
 	Flannel            flannel.DiscoveryRequest
 	Marker             flannel.MarkerRuleSpec
-	Pods               []resolver.PodSnapshot
-	TCLinks            []resolver.LinkIdentity
+	Pods               []endpoint.PodSnapshot
+	TCLinks            []endpoint.LinkIdentity
 }
 
 type StaticRuntime struct {
 	config          StaticRuntimeConfig
 	cri             io.Closer
-	endpointScanner *resolver.EndpointScanner
+	endpointScanner *endpoint.EndpointScanner
 	pins            *datapath.PinScanner
 	tcScanner       *datapath.TCScanner
 	sources         controlplane.Sources
@@ -85,7 +85,7 @@ func (r *StaticRuntime) RunOnce(ctx context.Context) (reconcile.ReconcileResult,
 	if err != nil {
 		return reconcile.ReconcileResult{}, fmt.Errorf("prepare endpoint links: %w", err)
 	}
-	links := resolver.MergeEndpointLinks(r.config.TCLinks, endpoints.Endpoints)
+	links := endpoint.MergeEndpointLinks(r.config.TCLinks, endpoints.Endpoints)
 	observer, err := controlplane.NewObserver(r.sources, controlplane.ObservationInput{
 		Generation: r.config.Generation, PreflightRequest: r.config.Preflight, FlannelRequest: r.config.Flannel,
 		MarkerRule: r.config.Marker, Pods: r.config.Pods, TCLinks: links, BaseTCLinks: r.config.TCLinks,

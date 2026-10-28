@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
-	"github.com/cat-cc-Lcos/FNCache/internal/resolver"
 )
 
 type fakeTCBackend struct {
@@ -29,7 +29,7 @@ func (b *legacyFakeTCBackend) MigrateLegacyFilter(_ context.Context, _ TCFilterS
 	return b.result, b.recognized, nil
 }
 
-func (b *fakeTCBackend) EnsureClsact(ctx context.Context, link resolver.LinkIdentity) (TCQdiscState, error) {
+func (b *fakeTCBackend) EnsureClsact(ctx context.Context, link endpoint.LinkIdentity) (TCQdiscState, error) {
 	if err := ctx.Err(); err != nil {
 		return TCQdiscState{}, err
 	}
@@ -37,7 +37,7 @@ func (b *fakeTCBackend) EnsureClsact(ctx context.Context, link resolver.LinkIden
 	return b.qdisc, nil
 }
 
-func (b *fakeTCBackend) ListFilters(ctx context.Context, _ resolver.LinkIdentity) ([]TCFilterState, error) {
+func (b *fakeTCBackend) ListFilters(ctx context.Context, _ endpoint.LinkIdentity) ([]TCFilterState, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -68,8 +68,8 @@ func (b *fakeTCBackend) RemoveFilter(ctx context.Context, spec TCFilterSpec) err
 	return nil
 }
 
-func testLink() resolver.LinkIdentity {
-	return resolver.LinkIdentity{NetNSInode: 42, IfIndex: 7}
+func testLink() endpoint.LinkIdentity {
+	return endpoint.LinkIdentity{NetNSInode: 42, IfIndex: 7}
 }
 
 func TestNewFixedFilterUsesFrozenIdentity(t *testing.T) {
