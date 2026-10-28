@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 type CommandRunner func(context.Context, string, ...string) ([]byte, error)
@@ -21,6 +22,8 @@ var requiredBPFHelpers = []string{
 	"bpf_map_lookup_elem", "bpf_map_update_elem", "bpf_get_hash_recalc",
 	"bpf_skb_adjust_room", "bpf_skb_store_bytes", "bpf_l3_csum_replace", "bpf_spin_lock", "bpf_spin_unlock",
 }
+
+const reservedTOSMask uint32 = 0x04 | 0x08
 
 func hasHelper(output []byte, helper string) bool {
 	for _, field := range strings.Fields(string(output)) {
@@ -50,31 +53,140 @@ func validRouteOutput(output []byte) bool {
 
 func hasReservedTOSConflict(output []byte, markerChain, markerComment string) bool {
 	for _, raw := range strings.Split(string(output), "\n") {
-		line := strings.Join(strings.Fields(raw), " ")
+		line := strings.TrimSpace(raw)
 		if isMarkerRule(line, markerChain, markerComment) {
 			continue
 		}
-		normalized := strings.ToLower(line)
-		if !strings.Contains(normalized, "set-tos") && !strings.Contains(normalized, "set-dscp") && !strings.Contains(normalized, "set-xmark") {
-			continue
-		}
-		if strings.Contains(normalized, "0x04") || strings.Contains(normalized, "0x08") {
+		if hasReservedTOSRuleValue(line) {
 			return true
 		}
 	}
 	return false
 }
 
+func hasReservedTOSRuleValue(line string) bool {
+	fields := splitRuleFields(strings.ToLower(line))
+	for index := 0; index < len(fields); index++ {
+		field := fields[index]
+		if strings.HasPrefix(field, "\"") || strings.HasPrefix(field, "'") {
+			continue
+		}
+		option, value, inline := strings.Cut(field, "=")
+		switch option {
+		case "--set-dscp", "--set-dscp-class":
+			if !inline {
+				if index+1 >= len(fields) {
+					continue
+				}
+				index++
+			}
+			// DSCP occupies the TOS bits that include both FNCache markers.
+			return true
+		case "--tos", "--set-tos", "--set-xmark":
+			if !inline {
+				if index+1 >= len(fields) {
+					continue
+				}
+				value = fields[index+1]
+				index++
+			}
+			if tosValueTouchesReservedBits(value) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func splitRuleFields(line string) []string {
+	var fields []string
+	var field strings.Builder
+	var quote rune
+	escaped := false
+	appendField := func() {
+		if field.Len() == 0 {
+			return
+		}
+		fields = append(fields, field.String())
+		field.Reset()
+	}
+
+	for _, char := range line {
+		if escaped {
+			field.WriteRune(char)
+			escaped = false
+			continue
+		}
+		if quote != 0 {
+			field.WriteRune(char)
+			switch char {
+			case '\\':
+				escaped = true
+			case quote:
+				quote = 0
+			}
+			continue
+		}
+		switch char {
+		case '"', '\'':
+			quote = char
+			field.WriteRune(char)
+		default:
+			if unicode.IsSpace(char) {
+				appendField()
+				continue
+			}
+			field.WriteRune(char)
+		}
+	}
+	appendField()
+	return fields
+}
+
+func tosValueTouchesReservedBits(raw string) bool {
+	raw = strings.TrimSpace(strings.Trim(raw, "\"'"))
+	parts := strings.Split(raw, "/")
+	if len(parts) > 2 {
+		return false
+	}
+	value, ok := parseNetfilterValue(parts[0])
+	if !ok {
+		return false
+	}
+	mask := ^uint32(0)
+	if len(parts) == 2 {
+		mask, ok = parseNetfilterValue(parts[1])
+		if !ok {
+			return false
+		}
+	}
+	return (value|mask)&reservedTOSMask != 0
+}
+
+func parseNetfilterValue(raw string) (uint32, bool) {
+	raw = strings.TrimSpace(strings.Trim(raw, "\"'()[]{};,"))
+	if raw == "" {
+		return 0, false
+	}
+	base := 10
+	if strings.HasPrefix(strings.ToLower(raw), "0x") {
+		raw = raw[2:]
+		base = 16
+	}
+	value, err := strconv.ParseUint(raw, base, 32)
+	return uint32(value), err == nil
+}
+
 func isMarkerRule(line, markerChain, markerComment string) bool {
 	if markerChain == "" || markerComment == "" {
 		return isOncacheMarkerRule(line)
 	}
-	fields := strings.Fields(line)
+	fields := splitRuleFields(line)
 	return len(fields) == 18 && fields[1] == markerChain && strings.Trim(fields[5], "\"") == markerComment && markerRuleFieldsMatch(fields)
 }
 
 func isOncacheMarkerRule(line string) bool {
-	fields := strings.Fields(line)
+	fields := splitRuleFields(line)
 	return len(fields) == 18 && fields[1] == "ONCACHE" && strings.HasPrefix(strings.Trim(fields[5], "\""), "oncache:") && markerRuleFieldsMatch(fields)
 }
 
