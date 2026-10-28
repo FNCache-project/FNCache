@@ -61,6 +61,51 @@ func TestBuildPlanRequiresMatchingOwnershipEvidence(t *testing.T) {
 	}
 }
 
+func TestBuildPlanCleansOwnedOrphanMarkerHook(t *testing.T) {
+	const identity = "ONCACHE/oncache:dev"
+	state := reconcile.OwnershipState{
+		FlannelRule: reconcile.OwnedRule{Identity: identity, Fingerprint: "marker-fp"},
+	}
+	plan := BuildPlan(
+		state,
+		reconcile.ActualState{},
+		reconcile.RuleState{Identity: identity, JumpsPresent: true},
+		identity,
+		nil,
+	)
+	if len(plan.Blocked) != 0 || len(plan.Actions) != 2 {
+		t.Fatalf("orphan marker hook was not planned for cleanup: actions=%+v blocked=%+v", plan.Actions, plan.Blocked)
+	}
+	if plan.Actions[0].Kind != ActionMarker || plan.Actions[1].Kind != ActionState {
+		t.Fatalf("orphan marker hook cleanup was not ordered before state removal: actions=%+v", plan.Actions)
+	}
+	if plan.Actions[0].marker == nil || plan.Actions[0].marker.Identity != identity {
+		t.Fatalf("orphan marker cleanup did not retain ownership evidence: action=%+v", plan.Actions[0])
+	}
+}
+
+func TestBuildPlanBlocksOrphanMarkerHookWithoutIdentityEvidence(t *testing.T) {
+	const identity = "ONCACHE/oncache:dev"
+	state := reconcile.OwnershipState{
+		FlannelRule: reconcile.OwnedRule{Identity: identity, Fingerprint: "marker-fp"},
+	}
+	for name, marker := range map[string]reconcile.RuleState{
+		"missing identity":   {JumpsPresent: true},
+		"different identity": {Identity: "OTHER/other", JumpsPresent: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			plan := BuildPlan(state, reconcile.ActualState{}, marker, identity, nil)
+			if len(plan.Blocked) != 1 || plan.Blocked[0].Kind != ActionMarker {
+				t.Fatalf("unverified orphan marker hook was not blocked: actions=%+v blocked=%+v", plan.Actions, plan.Blocked)
+			}
+			executor := &fakeExecutor{}
+			if err := plan.Execute(context.Background(), executor, false); err == nil || len(executor.calls) != 0 {
+				t.Fatalf("blocked orphan marker plan executed: err=%v calls=%v", err, executor.calls)
+			}
+		})
+	}
+}
+
 func TestBuildPlanBlocksNonDirectActionFilter(t *testing.T) {
 	link := endpoint.LinkIdentity{IfIndex: 7}
 	owned := reconcile.AttachmentState{Link: link, Hook: string(datapath.HookEgress), Program: "tc_init_e", Priority: datapath.FixedTCPriority, Handle: 0x100, ProgramID: 10, DirectAction: true}
