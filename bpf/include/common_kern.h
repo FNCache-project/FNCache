@@ -318,4 +318,9 @@ static __always_inline int maccmp(char* mac1, char* mac2, int len) {
     return 0;
 }
 
+static __always_inline int oncache_mac_is_zero(const __u8 *mac) {
+    return mac[0] == 0 && mac[1] == 0 && mac[2] == 0 &&
+           mac[3] == 0 && mac[4] == 0 && mac[5] == 0;
+}
+
 #endif  // COMMON_KERN_H_
