@@ -94,7 +94,8 @@ func TestObserverDiscoverBuildsDesiredState(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !desired.Enabled || desired.Generation != 7 || desired.Datapath.ABI != reconcile.BPFABIVersion ||
-		desired.Datapath.VXLANVNI != 1 || desired.Flannel.Fingerprint != "flannel-fp" {
+		desired.Datapath.VXLANVNI != 1 || desired.Flannel.Fingerprint != "flannel-fp" ||
+		desired.Marker.Chain != input.MarkerRule.Chain || desired.Marker.Comment != input.MarkerRule.Comment {
 		t.Fatalf("unexpected desired state: %+v", desired)
 	}
 	if _, ok := desired.LocalEndpoints[readyEndpoint.Pod.UID]; !ok {

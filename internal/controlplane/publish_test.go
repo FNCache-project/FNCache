@@ -11,6 +11,7 @@ import (
 	"github.com/cat-cc-Lcos/FNCache/internal/datapath"
 	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
 	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/discovery"
+	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/flannel"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
 )
 
@@ -72,6 +73,55 @@ func TestVerifyStateRequiresCompleteVerifiedObjects(t *testing.T) {
 	delete(actual.Programs, "tc_restore")
 	if err := VerifyState(desired, actual); err == nil {
 		t.Fatal("missing program was accepted")
+	}
+}
+
+func TestVerifyStateRejectsMarkerMismatch(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		update func(*reconcile.DesiredState, *reconcile.ActualState)
+	}{
+		{name: "missing marker", update: func(_ *reconcile.DesiredState, actual *reconcile.ActualState) { actual.FlannelRule.Present = false }},
+		{name: "missing hook", update: func(_ *reconcile.DesiredState, actual *reconcile.ActualState) {
+			actual.FlannelRule.JumpsPresent = false
+		}},
+		{name: "identity drift", update: func(_ *reconcile.DesiredState, actual *reconcile.ActualState) {
+			actual.FlannelRule.Identity = "ONCACHE/foreign-marker"
+		}},
+		{name: "fingerprint drift", update: func(_ *reconcile.DesiredState, actual *reconcile.ActualState) {
+			actual.FlannelRule.Fingerprint = "foreign-rule"
+		}},
+		{name: "missing expectation", update: func(desired *reconcile.DesiredState, _ *reconcile.ActualState) {
+			desired.Marker = reconcile.MarkerRuleExpectation{}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			desired := publishTestDesired()
+			actual := publishTestActual(desired)
+			test.update(&desired, &actual)
+			if err := VerifyState(desired, actual); err == nil {
+				t.Fatalf("marker mismatch was accepted: desired=%+v actual=%+v", desired.Marker, actual.FlannelRule)
+			}
+		})
+	}
+}
+
+func TestPublisherRejectsDriftedMarkerBeforeCommit(t *testing.T) {
+	desired := publishTestDesired()
+	actual := publishTestActual(desired)
+	actual.FlannelRule.Fingerprint = "foreign-rule"
+	events := []string{}
+	store := &fakeOwnershipCommitter{events: &events}
+	control := &fakeControlPublisher{events: &events}
+	publisher, err := NewPublisher(store, control, publishTestConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publisher.CommitAndPublish(context.Background(), desired, actual); err == nil {
+		t.Fatal("drifted marker reached publication")
+	}
+	if len(events) != 0 {
+		t.Fatalf("drifted marker reached ownership or control publish: %v", events)
 	}
 }
 
@@ -309,6 +359,7 @@ func publishTestConfig() PublishConfig {
 }
 
 func publishTestDesired() reconcile.DesiredState {
+	marker := publishTestMarkerSpec()
 	resolvedEndpoint := endpoint.Endpoint{
 		Pod: endpoint.PodIdentity{Namespace: "default", Name: "web", UID: "pod-a"}, Node: endpoint.NodeIdentity{Name: "node-a"},
 		PodIPv4: netip.MustParseAddr("10.244.1.10"), NetNSInode: 42,
@@ -319,7 +370,12 @@ func publishTestDesired() reconcile.DesiredState {
 		Generation: 7, Enabled: true, LocalEndpoints: map[string]endpoint.Endpoint{resolvedEndpoint.Pod.UID: resolvedEndpoint},
 		Datapath: reconcile.DatapathSpec{VXLANVNI: 1, VXLANUDPPort: 8472},
 		Flannel:  reconcile.FlannelState{UnderlayLink: endpoint.LinkIdentity{IfIndex: 2, IfName: "eth0", MAC: []byte{2, 0, 0, 0, 0, 1}}, UnderlayIPv4: netip.MustParseAddr("192.0.2.10")},
+		Marker:   reconcile.MarkerRuleExpectation{Chain: marker.Chain, Comment: marker.Comment},
 	}
+}
+
+func publishTestMarkerSpec() flannel.MarkerRuleSpec {
+	return flannel.MarkerRuleSpec{Chain: "ONCACHE", Comment: "oncache:install-a"}
 }
 
 func publishTestActual(desired reconcile.DesiredState) reconcile.ActualState {
@@ -327,10 +383,11 @@ func publishTestActual(desired reconcile.DesiredState) reconcile.ActualState {
 }
 
 func publishTestActualWithSchema(desired reconcile.DesiredState, schema datapath.CollectionSchema) reconcile.ActualState {
+	marker := flannel.MarkerRuleSpec{Chain: desired.Marker.Chain, Comment: desired.Marker.Comment}
 	actual := reconcile.ActualState{Control: reconcile.ControlState{Verified: true}, Programs: map[string]reconcile.ProgramState{
 		"tc_init_e": {ID: 10, Name: "tc_init_e"}, "tc_restore": {ID: 11, Name: "tc_restore"},
 		"tc_init_in": {ID: 12, Name: "tc_init_in"}, "tc_masq": {ID: 13, Name: "tc_masq"},
-	}, Maps: make(map[string]reconcile.MapState), FlannelRule: reconcile.RuleState{Present: true, JumpsPresent: true, Identity: "ONCACHE/oncache:install-a", Fingerprint: "rule-fp"}}
+	}, Maps: make(map[string]reconcile.MapState), FlannelRule: reconcile.RuleState{Present: true, JumpsPresent: true, Identity: marker.Chain + "/" + marker.Comment, Fingerprint: flannel.ExpectedMarkerFingerprint(marker)}}
 	for _, expected := range schema.Maps {
 		actual.Maps[expected.Name] = reconcile.MapState{ID: 1, Name: expected.Name, KeySize: expected.KeySize, ValueSize: expected.ValueSize, MaxEntries: expected.MaxEntries}
 	}
