@@ -46,10 +46,14 @@ func (s *informerErrorSet) record(key informerObjectKey, resourceVersion string,
 }
 
 func (s *informerErrorSet) clear(key informerObjectKey, keyed bool) bool {
-	if !keyed {
-		return false
-	}
 	changed := false
+	if s.unscoped != nil {
+		s.unscoped = nil
+		changed = true
+	}
+	if !keyed {
+		return changed
+	}
 	for existing := range s.byObject {
 		if sameInformerObject(existing, key) {
 			delete(s.byObject, existing)
@@ -90,6 +94,8 @@ type InformerSource struct {
 	podErrors        informerErrorSet
 	nodeErrors       informerErrorSet
 	errorChanged     chan struct{}
+	podRegistration  cache.ResourceEventHandlerRegistration
+	nodeRegistration cache.ResourceEventHandlerRegistration
 	healthMu         sync.RWMutex
 	synced           bool
 	lastProbeAt      time.Time
@@ -108,20 +114,24 @@ func NewInformerSource(client kubernetes.Interface, store *SnapshotStore, resync
 	}
 	factory := informers.NewSharedInformerFactory(client, resyncPeriod)
 	source := &InformerSource{factory: factory, pods: factory.Core().V1().Pods(), nodes: factory.Core().V1().Nodes(), client: client, store: store, errorChanged: make(chan struct{})}
-	if _, err := source.pods.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+	podRegistration, err := source.pods.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    source.addPod,
 		UpdateFunc: source.updatePod,
 		DeleteFunc: source.deletePod,
-	}); err != nil {
+	})
+	if err != nil {
 		return nil, fmt.Errorf("register Pod informer handler: %w", err)
 	}
-	if _, err := source.nodes.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+	source.podRegistration = podRegistration
+	nodeRegistration, err := source.nodes.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    source.addNode,
 		UpdateFunc: source.updateNode,
 		DeleteFunc: source.deleteNode,
-	}); err != nil {
+	})
+	if err != nil {
 		return nil, fmt.Errorf("register Node informer handler: %w", err)
 	}
+	source.nodeRegistration = nodeRegistration
 	return source, nil
 }
 
@@ -163,8 +173,11 @@ func (s *InformerSource) Run(ctx context.Context) {
 }
 
 func (s *InformerSource) WaitForSync(ctx context.Context) error {
-	if !cache.WaitForCacheSync(ctx.Done(), s.pods.Informer().HasSynced, s.nodes.Informer().HasSynced) {
+	if !cache.WaitForCacheSync(ctx.Done(), s.pods.Informer().HasSynced, s.nodes.Informer().HasSynced, s.podRegistration.HasSynced, s.nodeRegistration.HasSynced) {
 		if err := ctx.Err(); err != nil {
+			if lastErr := s.LastError(); lastErr != nil {
+				return fmt.Errorf("%w: unresolved informer error: %v", err, lastErr)
+			}
 			return err
 		}
 		return fmt.Errorf("Pod and Node informers did not synchronize")
@@ -180,6 +193,9 @@ func (s *InformerSource) WaitForSync(ctx context.Context) error {
 		select {
 		case <-changed:
 		case <-ctx.Done():
+			if lastErr := s.LastError(); lastErr != nil {
+				return fmt.Errorf("%w: unresolved informer error: %v", ctx.Err(), lastErr)
+			}
 			return ctx.Err()
 		}
 	}
@@ -221,9 +237,6 @@ func (s *InformerSource) recordNodeError(obj interface{}, err error) {
 
 func (s *InformerSource) clearError(errors *informerErrorSet, obj interface{}) {
 	key, _, keyed := informerObjectMetadata(obj)
-	if !keyed {
-		return
-	}
 	s.errMu.Lock()
 	if errors.clear(key, keyed) {
 		s.signalErrorChangeLocked()

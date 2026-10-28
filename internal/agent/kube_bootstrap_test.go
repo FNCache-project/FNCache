@@ -116,6 +116,11 @@ func TestKubeBootstrapRecoversAfterInitialConversionFailure(t *testing.T) {
 	if source.LastError() == nil {
 		t.Fatal("initial conversion failure was not recorded")
 	}
+	select {
+	case err := <-startDone:
+		t.Fatalf("bootstrap returned before conversion recovery: %v", err)
+	default:
+	}
 	recovered := invalid.DeepCopy()
 	recovered.ResourceVersion, recovered.Status.PodIP = "2", "10.42.0.2"
 	if _, err := client.CoreV1().Pods("default").Update(ctx, recovered, metav1.UpdateOptions{}); err != nil {
