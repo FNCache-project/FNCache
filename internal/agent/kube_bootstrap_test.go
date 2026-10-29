@@ -93,17 +93,48 @@ func TestKubeBootstrapCancellationDisables(t *testing.T) {
 	}
 }
 
-func TestKubeBootstrapRejectsConversionFailureAndRestart(t *testing.T) {
-	bootstrap := newBootstrap(t, bootstrapPod("2001:db8::2"))
+func TestKubeBootstrapRecoversAfterInitialConversionFailure(t *testing.T) {
+	invalid := bootstrapPod("2001:db8::2")
+	client := fake.NewSimpleClientset(invalid, bootstrapNode())
+	store := kubernetes.NewSnapshotStore()
+	source, err := kubernetes.NewInformerSource(client, store, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrap, err := NewKubeBootstrap(source, store)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := bootstrap.Start(ctx); err == nil {
-		t.Fatal("IPv6 Pod unexpectedly reached Ready")
+	startDone := make(chan error, 1)
+	go func() { startDone <- bootstrap.Start(ctx) }()
+	deadline := time.Now().Add(time.Second)
+	for source.LastError() == nil && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
 	}
-	if bootstrap.State() != KubeBootstrapDisabled {
-		t.Fatalf("state = %s, want Disabled", bootstrap.State())
+	if source.LastError() == nil {
+		t.Fatal("initial conversion failure was not recorded")
 	}
-	if err := bootstrap.Start(context.Background()); err == nil {
-		t.Fatal("bootstrap restart unexpectedly succeeded")
+	select {
+	case err := <-startDone:
+		t.Fatalf("bootstrap returned before conversion recovery: %v", err)
+	default:
+	}
+	recovered := invalid.DeepCopy()
+	recovered.ResourceVersion, recovered.Status.PodIP = "2", "10.42.0.2"
+	if _, err := client.CoreV1().Pods("default").Update(ctx, recovered, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-startDone:
+		if err != nil {
+			t.Fatalf("bootstrap did not recover: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatalf("bootstrap recovery timed out: %v", ctx.Err())
+	}
+	if bootstrap.State() != KubeBootstrapReady {
+		t.Fatalf("state = %s, want Ready", bootstrap.State())
 	}
 }

@@ -174,6 +174,59 @@ func TestInformerSourceInformerErrorRecoveryIsScopedToResource(t *testing.T) {
 	}
 }
 
+func TestInformerSourceInformerErrorRecoveryIsScopedToObject(t *testing.T) {
+	client := fake.NewSimpleClientset(informerNode())
+	source, err := NewInformerSource(client, NewSnapshotStore(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go source.Run(ctx)
+	if err := source.WaitForSync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	invalid := informerPod()
+	invalid.Status.PodIP = "not-an-ip"
+	source.addPod(invalid)
+	validOther := informerPod()
+	validOther.Name, validOther.UID, validOther.ResourceVersion = "other", types.UID("pod-2"), "2"
+	source.addPod(validOther)
+	if source.LastError() == nil {
+		t.Fatal("a different Pod cleared the unresolved Pod error")
+	}
+
+	recovered := invalid.DeepCopy()
+	recovered.ResourceVersion, recovered.Status.PodIP = "3", "10.42.0.4"
+	source.addPod(recovered)
+	if source.LastError() != nil {
+		t.Fatalf("same Pod recovery left an informer error: %v", source.LastError())
+	}
+}
+
+func TestInformerSourceUnscopedErrorRecoversAfterSuccessfulEvent(t *testing.T) {
+	source, err := NewInformerSource(fake.NewSimpleClientset(informerNode()), NewSnapshotStore(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go source.Run(ctx)
+	if err := source.WaitForSync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	source.addPod(struct{}{})
+	if source.LastError() == nil {
+		t.Fatal("unscoped informer error was not recorded")
+	}
+	source.addPod(informerPod())
+	if source.LastError() != nil {
+		t.Fatalf("successful Pod event did not clear unscoped error: %v", source.LastError())
+	}
+}
+
 func TestInformerSourceProbeAPIRecordsFailure(t *testing.T) {
 	client := fake.NewSimpleClientset(informerNode())
 	source, err := NewInformerSource(client, NewSnapshotStore(), 0)
@@ -226,10 +279,11 @@ func TestInformerSourceTombstoneDelete(t *testing.T) {
 	}
 }
 
-func TestInformerSourceRejectsIPv6PodAtSync(t *testing.T) {
+func TestInformerSourceRecoversAfterInitialIPv6PodConversionFailure(t *testing.T) {
 	pod := informerPod()
 	pod.Status.PodIP = "2001:db8::2"
-	source, err := NewInformerSource(fake.NewSimpleClientset(pod), NewSnapshotStore(), 0)
+	client := fake.NewSimpleClientset(pod, informerNode())
+	source, err := NewInformerSource(client, NewSnapshotStore(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,8 +292,53 @@ func TestInformerSourceRejectsIPv6PodAtSync(t *testing.T) {
 	go source.Run(ctx)
 	syncCtx, syncCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer syncCancel()
-	if err := source.WaitForSync(syncCtx); err == nil {
-		t.Fatal("IPv6 Pod unexpectedly passed initial snapshot sync")
+	syncDone := make(chan error, 1)
+	go func() { syncDone <- source.WaitForSync(syncCtx) }()
+	waitFor(t, func() bool { return source.LastError() != nil })
+	select {
+	case err := <-syncDone:
+		t.Fatalf("informer sync returned before conversion recovery: %v", err)
+	default:
+	}
+
+	recovered := pod.DeepCopy()
+	recovered.ResourceVersion, recovered.Status.PodIP = "2", "10.42.0.2"
+	if _, err := client.CoreV1().Pods("default").Update(ctx, recovered, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-syncDone:
+		if err != nil {
+			t.Fatalf("recovered informer sync failed: %v", err)
+		}
+	case <-syncCtx.Done():
+		t.Fatalf("recovered informer sync timed out: %v", syncCtx.Err())
+	}
+	health := source.Health()
+	if !health.Synced || health.InformerError != nil || !health.FreshAt(health.LastProbeAt, time.Minute) {
+		t.Fatalf("informer did not become healthy after conversion recovery: %+v", health)
+	}
+}
+
+func TestInformerSourceWaitForSyncCancelsWithPersistentConversionFailure(t *testing.T) {
+	pod := informerPod()
+	pod.Status.PodIP = "2001:db8::2"
+	source, err := NewInformerSource(fake.NewSimpleClientset(pod, informerNode()), NewSnapshotStore(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	go source.Run(ctx)
+	err = source.WaitForSync(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("persistent conversion failure error = %v, want context deadline", err)
+	}
+	if !strings.Contains(err.Error(), "unresolved informer error") {
+		t.Fatalf("persistent conversion failure error = %v, want unresolved informer detail", err)
+	}
+	if source.Health().Synced {
+		t.Fatal("informer became synced with an unresolved conversion failure")
 	}
 }
 
