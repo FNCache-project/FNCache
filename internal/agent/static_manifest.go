@@ -109,9 +109,13 @@ func DecodeStaticRuntimeManifest(reader io.Reader) (StaticRuntimeConfig, error) 
 func (m staticRuntimeManifest) runtimeConfig() (StaticRuntimeConfig, error) {
 	pods := make([]endpoint.PodSnapshot, 0, len(m.Pods))
 	for _, pod := range m.Pods {
-		ip, err := netip.ParseAddr(pod.PodIPv4)
-		if err != nil {
-			return StaticRuntimeConfig{}, fmt.Errorf("parse Pod IPv4 %q: %w", pod.PodIPv4, err)
+		var ip netip.Addr
+		if pod.PodIPv4 != "" {
+			parsed, err := netip.ParseAddr(pod.PodIPv4)
+			if err != nil {
+				return StaticRuntimeConfig{}, fmt.Errorf("parse Pod IPv4 %q: %w", pod.PodIPv4, err)
+			}
+			ip = parsed
 		}
 		pods = append(pods, endpoint.PodSnapshot{Identity: endpoint.PodIdentity{Namespace: pod.Namespace, Name: pod.Name, UID: pod.UID}, NodeName: pod.NodeName, PodIPv4: ip, HostNetwork: pod.HostNetwork, Phase: pod.Phase, Deleting: pod.Deleting, ResourceVersion: pod.ResourceVersion})
 	}
