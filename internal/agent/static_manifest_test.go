@@ -68,3 +68,33 @@ func TestDecodeStaticRuntimeManifestRejectsInvalidIdentity(t *testing.T) {
 		t.Fatal("invalid Pod IPv4 was accepted")
 	}
 }
+
+func TestDecodeStaticRuntimeManifestAllowsEmptyPodIPv4(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		podFields   string
+		hostNetwork bool
+		deleting    bool
+		phase       string
+	}{
+		{name: "host network", podFields: "phase: Running\n    hostNetwork: true", hostNetwork: true, phase: "Running"},
+		{name: "deleting", podFields: "phase: Running\n    deleting: true", deleting: true, phase: "Running"},
+		{name: "terminal", podFields: "phase: Succeeded", phase: "Succeeded"},
+		{name: "unassigned", podFields: "phase: Running", phase: "Running"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			manifest := strings.Replace(validStaticManifest, "    podIPv4: 10.42.0.2\n    phase: Running", "    podIPv4: \"\"\n    "+test.podFields, 1)
+			config, err := DecodeStaticRuntimeManifest(strings.NewReader(manifest))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(config.Pods) != 1 {
+				t.Fatalf("expected one Pod, got %d", len(config.Pods))
+			}
+			pod := config.Pods[0]
+			if pod.PodIPv4.IsValid() || pod.HostNetwork != test.hostNetwork || pod.Deleting != test.deleting || pod.Phase != test.phase {
+				t.Fatalf("unexpected Pod snapshot: %+v", pod)
+			}
+		})
+	}
+}
