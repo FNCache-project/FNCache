@@ -82,6 +82,11 @@ func (h *LocalEndpointHandler) Handle(ctx context.Context, key reconcile.Reconci
 	if err != nil {
 		return classifyEndpointError(err)
 	}
+	snapshot, err = h.refreshEndpointSnapshot(key.UID, pod, resolvedEndpoint)
+	if err != nil {
+		return err
+	}
+	pod = snapshot.Pods[key.UID]
 	base, err := h.config.Desired.Desired(ctx)
 	if err != nil {
 		return fmt.Errorf("read desired state: %w", err)
@@ -106,6 +111,9 @@ func (h *LocalEndpointHandler) Handle(ctx context.Context, key reconcile.Reconci
 		return err
 	}
 	if err := h.config.Generation.Execute(ctx, desired, func(ctx context.Context, desired reconcile.DesiredState, actual reconcile.ActualState) error {
+		if _, err := h.refreshEndpointSnapshot(key.UID, pod, resolvedEndpoint); err != nil {
+			return err
+		}
 		if hasPrevious && ownedEndpointIdentityChanged(previous, resolvedEndpoint) {
 			if err := h.config.Remover.Remove(ctx, previous, actual, desired); err != nil {
 				return fmt.Errorf("remove previous local endpoint identity: %w", err)
@@ -127,6 +135,27 @@ func (h *LocalEndpointHandler) Handle(ctx context.Context, key reconcile.Reconci
 		return fmt.Errorf("publish local endpoint: %w", err)
 	}
 	return nil
+}
+
+func (h *LocalEndpointHandler) refreshEndpointSnapshot(uid string, expected endpoint.PodSnapshot, resolved endpoint.Endpoint) (kubernetes.Snapshot, error) {
+	snapshot := h.config.Store.Snapshot()
+	current, ok := snapshot.Pods[uid]
+	if !ok || !sameLocalPodSnapshot(expected, current) || !endpointMatchesPodSnapshot(resolved, current) {
+		cause := fmt.Errorf("%w: Pod %s snapshot changed during local endpoint reconciliation", endpoint.ErrStaleObject, uid)
+		return kubernetes.Snapshot{}, reconcile.NewClassifiedError(reconcile.ErrorRetryable, reconcile.ReasonEndpointSnapshotChanged, 0, cause)
+	}
+	return snapshot, nil
+}
+
+func sameLocalPodSnapshot(a, b endpoint.PodSnapshot) bool {
+	return a.Identity == b.Identity && a.NodeName == b.NodeName && a.PodIPv4 == b.PodIPv4 &&
+		a.HostNetwork == b.HostNetwork && a.Phase == b.Phase && a.Deleting == b.Deleting &&
+		a.ResourceVersion == b.ResourceVersion
+}
+
+func endpointMatchesPodSnapshot(resolved endpoint.Endpoint, pod endpoint.PodSnapshot) bool {
+	return resolved.Pod == pod.Identity && resolved.Node.Name == pod.NodeName &&
+		resolved.PodIPv4 == pod.PodIPv4 && resolved.ResourceVersion == pod.ResourceVersion
 }
 
 func isTerminalPodPhase(phase string) bool {

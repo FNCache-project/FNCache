@@ -206,15 +206,16 @@ const (
 )
 
 const (
-	ReasonFlannelLinkMissing    = "FLANNEL_LINK_MISSING"
-	ReasonBPFABIMismatch        = "BPF_ABI_MISMATCH"
-	ReasonTCForeignConflict     = "TC_FOREIGN_CONFLICT"
-	ReasonEndpointNotReady      = "ENDPOINT_NOT_READY"
-	ReasonNetNSRestoreFailed    = "NETNS_RESTORE_FAILED"
-	ReasonDatapathNotReady      = "DATAPATH_NOT_READY"
-	ReasonCapabilityUnsupported = "CAPABILITY_UNSUPPORTED"
-	ReasonPodIPReusePending     = "POD_IP_REUSE_PENDING"
-	ReasonEndpointIdentityReuse = "ENDPOINT_IDENTITY_REUSE_PENDING"
+	ReasonFlannelLinkMissing      = "FLANNEL_LINK_MISSING"
+	ReasonBPFABIMismatch          = "BPF_ABI_MISMATCH"
+	ReasonTCForeignConflict       = "TC_FOREIGN_CONFLICT"
+	ReasonEndpointNotReady        = "ENDPOINT_NOT_READY"
+	ReasonNetNSRestoreFailed      = "NETNS_RESTORE_FAILED"
+	ReasonDatapathNotReady        = "DATAPATH_NOT_READY"
+	ReasonCapabilityUnsupported   = "CAPABILITY_UNSUPPORTED"
+	ReasonEndpointSnapshotChanged = "ENDPOINT_SNAPSHOT_CHANGED"
+	ReasonPodIPReusePending       = "POD_IP_REUSE_PENDING"
+	ReasonEndpointIdentityReuse   = "ENDPOINT_IDENTITY_REUSE_PENDING"
 )
 
 type ClassifiedError struct {
