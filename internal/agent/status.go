@@ -56,6 +56,8 @@ func (r *DynamicRuntime) Status(_ context.Context) observability.Snapshot {
 		snapshot.Reason = ""
 	} else if snapshot.State == reconcile.AgentReady && datapathReason != "" && !snapshot.DatapathEnabled {
 		snapshot.Reason = datapathReason
+	} else if snapshot.State == reconcile.AgentDisabled && datapathReason != "" && !snapshot.DatapathEnabled {
+		snapshot.Reason = datapathReason
 	} else if snapshot.Reason == "" {
 		snapshot.Reason = readinessReason(snapshot)
 	}

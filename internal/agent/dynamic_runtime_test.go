@@ -20,6 +20,7 @@ import (
 	"github.com/cat-cc-Lcos/FNCache/internal/controlplane"
 	"github.com/cat-cc-Lcos/FNCache/internal/datapath"
 	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
+	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/discovery"
 	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/flannel"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
 )
@@ -119,6 +120,15 @@ func (s dynamicRuntimeMarkerHealth) Scan(ctx context.Context, spec flannel.Marke
 		state.Fingerprint = "drifted"
 	}
 	return state, err
+}
+
+type dynamicRuntimeUnsupportedPreflight struct{}
+
+func (dynamicRuntimeUnsupportedPreflight) Check(context.Context, discovery.PreflightRequest) (discovery.CapabilityReport, error) {
+	return discovery.CapabilityReport{
+		Supported: false,
+		Reasons:   []discovery.Reason{{Code: "BTF_MISSING", Message: "vmlinux BTF is unavailable"}},
+	}, nil
 }
 
 type dynamicRuntimeHeartbeatControl struct {
@@ -361,6 +371,61 @@ func TestDynamicRuntimeSkipsDatapathWhenFeatureDisabled(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("disabled runtime did not stop after context cancellation")
+	}
+}
+
+func TestDynamicRuntimeKeepsUnsupportedPreflightDisabled(t *testing.T) {
+	sources := controlplane.Sources{Preflight: dynamicRuntimeUnsupportedPreflight{}, Flannel: dynamicObserverFlannel{}, Endpoints: dynamicObserverEndpoints{}, Pins: dynamicRuntimePins{}, TC: dynamicRuntimeTC{}, Rules: dynamicObserverRules{}}
+	events := []string{}
+	published := &atomic.Bool{}
+	control := &dynamicRuntimeHeartbeatControl{localHandlerControl: &localHandlerControl{events: &events}}
+	closer := &fakeCloser{}
+	factory := func(context.Context, datapathComponentConfig) (*datapathComponents, error) {
+		components := dynamicRuntimeComponents(t, sources, control, &events, published)
+		components.cri = closer
+		return components, nil
+	}
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a", UID: types.UID("node-a")}}
+	runtime, err := newDynamicRuntimeWithFactory(dynamicTestConfig(), fake.NewSimpleClientset(node), factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- runtime.Run(ctx) }()
+
+	deadline := time.Now().Add(time.Second)
+	for runtime.AgentState() != reconcile.AgentDisabled && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if runtime.AgentState() != reconcile.AgentDisabled {
+		t.Fatalf("agent state = %s, want %s", runtime.AgentState(), reconcile.AgentDisabled)
+	}
+	snapshot := runtime.SnapshotStore().Snapshot()
+	if snapshot.State != reconcile.AgentDisabled || snapshot.Ready || snapshot.DatapathEnabled || snapshot.Reason != "CAPABILITY_UNSUPPORTED: BTF_MISSING: vmlinux BTF is unavailable" {
+		t.Fatalf("unsupported preflight snapshot = %+v", snapshot)
+	}
+	if published.Load() || control.HeartbeatCount() != 0 {
+		t.Fatalf("unsupported preflight started datapath work: published=%t heartbeats=%d", published.Load(), control.HeartbeatCount())
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("unsupported runtime returned before context cancellation: %v", err)
+	default:
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("unsupported runtime returned error after cancellation: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("unsupported runtime did not stop after context cancellation")
+	}
+	if !closer.closed {
+		t.Fatal("unsupported runtime did not close datapath components")
 	}
 }
 

@@ -57,6 +57,8 @@ type DynamicRuntime struct {
 
 var ErrKubernetesSnapshotNotReady = errors.New("kubernetes snapshot is not ready")
 
+var errInitialDiscoveryUnsupported = errors.New("initial discovery unsupported")
+
 type datapathComponentFactory func(context.Context, datapathComponentConfig) (*datapathComponents, error)
 
 type dynamicObservationBackend struct {
@@ -178,6 +180,16 @@ func (r *DynamicRuntime) Run(ctx context.Context) error {
 		return err
 	}
 	if err := r.reconcileInitial(ctx); err != nil {
+		if errors.Is(err, errInitialDiscoveryUnsupported) {
+			if transitionErr := r.lifecycle.Transition(reconcile.AgentDisabled); transitionErr != nil {
+				_ = r.components.Close()
+				r.Status(ctx)
+				return transitionErr
+			}
+			r.Status(ctx)
+			<-ctx.Done()
+			return r.components.Close()
+		}
 		if transitionErr := r.lifecycle.Transition(reconcile.AgentDisabled); transitionErr != nil {
 			_ = r.components.Close()
 			r.Status(ctx)
@@ -395,7 +407,9 @@ func (r *DynamicRuntime) reconcileInitial(ctx context.Context) error {
 		return fmt.Errorf("initial discovery: %w", err)
 	}
 	if !desired.Enabled {
-		return fmt.Errorf("initial discovery disabled: %s", formatCapabilityReasons(desired.Capability.Reasons))
+		reason := fmt.Sprintf("%s: %s", reconcile.ReasonCapabilityUnsupported, formatCapabilityReasons(desired.Capability.Reasons))
+		r.setDatapathUnavailable(reason)
+		return fmt.Errorf("%w: %s", errInitialDiscoveryUnsupported, reason)
 	}
 	remover, err := controlplane.NewEndpointRemover(r.components.mapWriter, r.components.tc)
 	if err != nil {
