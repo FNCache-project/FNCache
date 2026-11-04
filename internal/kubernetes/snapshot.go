@@ -108,6 +108,22 @@ func (s *SnapshotStore) GetNode(name string) (NodeSnapshot, bool) {
 func (s *SnapshotStore) Snapshot() Snapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.snapshotLocked()
+}
+
+// WithReadLock invokes fn with a consistent snapshot while preventing Pod and
+// Node updates until fn returns. The callback must not call methods that try to
+// acquire the same store lock.
+func (s *SnapshotStore) WithReadLock(fn func(Snapshot) error) error {
+	if fn == nil {
+		return fmt.Errorf("snapshot read-lock function is required")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return fn(s.snapshotLocked())
+}
+
+func (s *SnapshotStore) snapshotLocked() Snapshot {
 	result := Snapshot{
 		ObservedAt: time.Now(),
 		Pods:       make(map[string]endpoint.PodSnapshot, len(s.pods)),

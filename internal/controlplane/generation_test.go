@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
@@ -161,5 +162,43 @@ func TestGenerationTransactionStopsBeforeCommitOnVerificationFailure(t *testing.
 	}
 	if len(events) != 4 || events[2] != "mutate" || events[3] != "scan" {
 		t.Fatalf("verification failure reached publish: %v", events)
+	}
+}
+
+func TestGenerationTransactionRunsPublishGateBeforeCommit(t *testing.T) {
+	desired := publishTestDesired()
+	actual := publishTestActual(desired)
+	events := []string{}
+	transaction := newGenerationTransaction(t, &events, actual, actual)
+	gate := func(_ context.Context, _ reconcile.DesiredState, _ reconcile.ActualState, publish func() error) error {
+		events = append(events, "gate")
+		return publish()
+	}
+	if err := transaction.Execute(context.Background(), desired, func(_ context.Context, _ reconcile.DesiredState, _ reconcile.ActualState) error {
+		events = append(events, "mutate")
+		return nil
+	}, gate); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"disable", "scan", "mutate", "scan", "gate", "commit", "publish"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %v, want %v", events, want)
+	}
+
+	events = nil
+	transaction = newGenerationTransaction(t, &events, actual, actual)
+	wantErr := errors.New("snapshot changed")
+	gate = func(context.Context, reconcile.DesiredState, reconcile.ActualState, func() error) error {
+		events = append(events, "gate")
+		return wantErr
+	}
+	if err := transaction.Execute(context.Background(), desired, func(_ context.Context, _ reconcile.DesiredState, _ reconcile.ActualState) error {
+		events = append(events, "mutate")
+		return nil
+	}, gate); !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want %v", err, wantErr)
+	}
+	if !reflect.DeepEqual(events, []string{"disable", "scan", "mutate", "scan", "gate"}) {
+		t.Fatalf("failed gate reached publish: events=%v", events)
 	}
 }

@@ -37,7 +37,7 @@ type Publisher interface {
 }
 
 type GenerationTransaction interface {
-	Execute(context.Context, reconcile.DesiredState, controlplane.GenerationMutator) error
+	Execute(context.Context, reconcile.DesiredState, controlplane.GenerationMutator, ...controlplane.GenerationPublishGate) error
 }
 
 type LocalEndpointHandlerConfig struct {
@@ -66,6 +66,7 @@ func NewLocalEndpointHandler(config LocalEndpointHandlerConfig) (*LocalEndpointH
 	return &LocalEndpointHandler{config: config}, nil
 }
 
+// Handle reconciles one local endpoint without publishing an outdated Pod snapshot.
 func (h *LocalEndpointHandler) Handle(ctx context.Context, key reconcile.ReconcileKey) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -82,6 +83,11 @@ func (h *LocalEndpointHandler) Handle(ctx context.Context, key reconcile.Reconci
 	if err != nil {
 		return classifyEndpointError(err)
 	}
+	snapshot, err = h.refreshEndpointSnapshot(key.UID, pod, resolvedEndpoint)
+	if err != nil {
+		return err
+	}
+	pod = snapshot.Pods[key.UID]
 	base, err := h.config.Desired.Desired(ctx)
 	if err != nil {
 		return fmt.Errorf("read desired state: %w", err)
@@ -106,6 +112,9 @@ func (h *LocalEndpointHandler) Handle(ctx context.Context, key reconcile.Reconci
 		return err
 	}
 	if err := h.config.Generation.Execute(ctx, desired, func(ctx context.Context, desired reconcile.DesiredState, actual reconcile.ActualState) error {
+		if _, err := h.refreshEndpointSnapshot(key.UID, pod, resolvedEndpoint); err != nil {
+			return err
+		}
 		if hasPrevious && ownedEndpointIdentityChanged(previous, resolvedEndpoint) {
 			if err := h.config.Remover.Remove(ctx, previous, actual, desired); err != nil {
 				return fmt.Errorf("remove previous local endpoint identity: %w", err)
@@ -123,10 +132,57 @@ func (h *LocalEndpointHandler) Handle(ctx context.Context, key reconcile.Reconci
 			return fmt.Errorf("ensure local endpoint Maps: %w", err)
 		}
 		return nil
-	}); err != nil {
+	}, h.endpointPublishGate(key.UID, pod, resolvedEndpoint)); err != nil {
 		return fmt.Errorf("publish local endpoint: %w", err)
 	}
 	return nil
+}
+
+// endpointPublishGate holds the snapshot read lock while validating and publishing.
+func (h *LocalEndpointHandler) endpointPublishGate(uid string, expected endpoint.PodSnapshot, resolved endpoint.Endpoint) controlplane.GenerationPublishGate {
+	return func(ctx context.Context, _ reconcile.DesiredState, _ reconcile.ActualState, publish func() error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return h.config.Store.WithReadLock(func(snapshot kubernetes.Snapshot) error {
+			if err := validateEndpointSnapshot(snapshot, uid, expected, resolved); err != nil {
+				return err
+			}
+			return publish()
+		})
+	}
+}
+
+// refreshEndpointSnapshot reads and validates the current Pod snapshot.
+func (h *LocalEndpointHandler) refreshEndpointSnapshot(uid string, expected endpoint.PodSnapshot, resolved endpoint.Endpoint) (kubernetes.Snapshot, error) {
+	snapshot := h.config.Store.Snapshot()
+	if err := validateEndpointSnapshot(snapshot, uid, expected, resolved); err != nil {
+		return kubernetes.Snapshot{}, err
+	}
+	return snapshot, nil
+}
+
+// validateEndpointSnapshot rejects a resolved endpoint that no longer matches the Pod snapshot.
+func validateEndpointSnapshot(snapshot kubernetes.Snapshot, uid string, expected endpoint.PodSnapshot, resolved endpoint.Endpoint) error {
+	current, ok := snapshot.Pods[uid]
+	if !ok || !sameLocalPodSnapshot(expected, current) || !endpointMatchesPodSnapshot(resolved, current) {
+		cause := fmt.Errorf("%w: Pod %s snapshot changed during local endpoint reconciliation", endpoint.ErrStaleObject, uid)
+		return reconcile.NewClassifiedError(reconcile.ErrorRetryable, reconcile.ReasonEndpointSnapshotChanged, 0, cause)
+	}
+	return nil
+}
+
+// sameLocalPodSnapshot compares all Pod fields used by local endpoint resolution.
+func sameLocalPodSnapshot(a, b endpoint.PodSnapshot) bool {
+	return a.Identity == b.Identity && a.NodeName == b.NodeName && a.PodIPv4 == b.PodIPv4 &&
+		a.HostNetwork == b.HostNetwork && a.Phase == b.Phase && a.Deleting == b.Deleting &&
+		a.ResourceVersion == b.ResourceVersion
+}
+
+// endpointMatchesPodSnapshot verifies the resolved endpoint's Kubernetes identity fields.
+func endpointMatchesPodSnapshot(resolved endpoint.Endpoint, pod endpoint.PodSnapshot) bool {
+	return resolved.Pod == pod.Identity && resolved.Node.Name == pod.NodeName &&
+		resolved.PodIPv4 == pod.PodIPv4 && resolved.ResourceVersion == pod.ResourceVersion
 }
 
 func isTerminalPodPhase(phase string) bool {
