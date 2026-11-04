@@ -16,6 +16,10 @@ type GenerationScanner interface {
 
 type GenerationMutator func(context.Context, reconcile.DesiredState, reconcile.ActualState) error
 
+// GenerationPublishGate validates a generation and invokes publish while the
+// caller's publication-safety boundary is held.
+type GenerationPublishGate func(context.Context, reconcile.DesiredState, reconcile.ActualState, func() error) error
+
 type GenerationTransaction struct {
 	control fastPathDisabler
 	scanner GenerationScanner
@@ -29,7 +33,9 @@ func NewGenerationTransaction(control fastPathDisabler, scanner GenerationScanne
 	return &GenerationTransaction{control: control, scanner: scanner, publish: publisher}, nil
 }
 
-func (t *GenerationTransaction) Execute(ctx context.Context, desired reconcile.DesiredState, mutate GenerationMutator) error {
+// Execute disables the fast path, mutates and verifies the generation, then
+// publishes it through the optional publication gate.
+func (t *GenerationTransaction) Execute(ctx context.Context, desired reconcile.DesiredState, mutate GenerationMutator, gates ...GenerationPublishGate) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -68,7 +74,17 @@ func (t *GenerationTransaction) Execute(ctx context.Context, desired reconcile.D
 	if err := t.publish.VerifyState(desired, after); err != nil {
 		return fmt.Errorf("verify generation %d: %w", desired.Generation, err)
 	}
-	if err := t.publish.CommitAndPublish(ctx, desired, after); err != nil {
+	publish := func() error { return t.publish.CommitAndPublish(ctx, desired, after) }
+	if len(gates) > 1 {
+		return fmt.Errorf("generation transaction accepts at most one publication gate")
+	}
+	if len(gates) == 1 && gates[0] != nil {
+		if err := gates[0](ctx, desired, after, publish); err != nil {
+			return fmt.Errorf("publish generation %d: %w", desired.Generation, err)
+		}
+		return nil
+	}
+	if err := publish(); err != nil {
 		return fmt.Errorf("publish generation %d: %w", desired.Generation, err)
 	}
 	return nil

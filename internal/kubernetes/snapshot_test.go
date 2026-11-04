@@ -1,9 +1,11 @@
 package kubernetes
 
 import (
+	"errors"
 	"net/netip"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
 )
@@ -84,5 +86,47 @@ func TestSnapshotStoreConcurrentAccess(t *testing.T) {
 	wg.Wait()
 	if len(store.Snapshot().Pods) != 200 {
 		t.Fatalf("got %d pods, want 200", len(store.Snapshot().Pods))
+	}
+}
+
+func TestSnapshotStoreWithReadLockBlocksUpdates(t *testing.T) {
+	store := NewSnapshotStore()
+	current := testPod("pod-a", "node-a", "10.42.0.2")
+	if err := store.UpsertPod(current); err != nil {
+		t.Fatal(err)
+	}
+	updated := current
+	updated.ResourceVersion = "2"
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	callbackDone := make(chan error, 1)
+	go func() {
+		callbackDone <- store.WithReadLock(func(snapshot Snapshot) error {
+			if got := snapshot.Pods[current.Identity.UID]; got.ResourceVersion != current.ResourceVersion {
+				return errors.New("read lock observed an unexpected snapshot")
+			}
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+	writeDone := make(chan error, 1)
+	go func() { writeDone <- store.UpsertPod(updated) }()
+	select {
+	case err := <-writeDone:
+		close(release)
+		t.Fatalf("Pod update was not blocked by read lock: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	if err := <-callbackDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-writeDone; err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := store.GetPod(current.Identity.UID); !ok || got.ResourceVersion != updated.ResourceVersion {
+		t.Fatalf("update did not complete after read lock release: got=%#v ok=%t", got, ok)
 	}
 }

@@ -61,11 +61,15 @@ type localHandlerScanner struct {
 	actual reconcile.ActualState
 	calls  int
 	events *[]string
+	onScan func(int)
 }
 
 func (s *localHandlerScanner) Scan(context.Context) (reconcile.ActualState, error) {
 	s.calls++
 	*s.events = append(*s.events, "scan")
+	if s.onScan != nil {
+		s.onScan(s.calls)
+	}
 	return s.actual, nil
 }
 
@@ -82,7 +86,7 @@ type localHandlerGeneration struct {
 	publisher Publisher
 }
 
-func (g *localHandlerGeneration) Execute(ctx context.Context, desired reconcile.DesiredState, mutate controlplane.GenerationMutator) error {
+func (g *localHandlerGeneration) Execute(ctx context.Context, desired reconcile.DesiredState, mutate controlplane.GenerationMutator, gates ...controlplane.GenerationPublishGate) error {
 	if err := g.control.Disable(ctx); err != nil {
 		return err
 	}
@@ -97,7 +101,11 @@ func (g *localHandlerGeneration) Execute(ctx context.Context, desired reconcile.
 	if err != nil {
 		return err
 	}
-	return g.publisher.CommitAndPublish(ctx, desired, actual)
+	publish := func() error { return g.publisher.CommitAndPublish(ctx, desired, actual) }
+	if len(gates) == 1 && gates[0] != nil {
+		return gates[0](ctx, desired, actual, publish)
+	}
+	return publish()
 }
 
 func testLocalGeneration(control Control, scanner StateScanner, publisher Publisher) GenerationTransaction {
@@ -162,7 +170,7 @@ func TestLocalEndpointHandlerRejectsPodSnapshotDriftBeforeMutation(t *testing.T)
 		{name: "PodIP", mutate: func(pod *endpoint.PodSnapshot) { pod.PodIPv4 = netip.MustParseAddr("10.42.0.9") }},
 		{name: "deletion", mutate: func(pod *endpoint.PodSnapshot) { pod.Deleting = true }},
 		{name: "phase", mutate: func(pod *endpoint.PodSnapshot) { pod.Phase = "Succeeded" }},
-		{name: "ResourceVersion", mutate: func(pod *endpoint.PodSnapshot) {}},
+		{name: "ResourceVersion", mutate: func(pod *endpoint.PodSnapshot) { pod.ResourceVersion = "2" }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -178,7 +186,6 @@ func TestLocalEndpointHandlerRejectsPodSnapshotDriftBeforeMutation(t *testing.T)
 			resolver := &localHandlerResolver{endpoint: handlerEndpoint("pod-1"), events: &events}
 			resolver.onResolve = func(endpoint.PodSnapshot) {
 				updated := pod
-				updated.ResourceVersion = "2"
 				test.mutate(&updated)
 				if err := store.UpsertPod(updated); err != nil {
 					t.Fatal(err)
@@ -204,6 +211,49 @@ func TestLocalEndpointHandlerRejectsPodSnapshotDriftBeforeMutation(t *testing.T)
 				t.Fatalf("snapshot drift triggered mutation: events=%v", events)
 			}
 		})
+	}
+}
+
+func TestLocalEndpointHandlerRejectsSnapshotDriftBeforePublish(t *testing.T) {
+	store := kubernetes.NewSnapshotStore()
+	if err := store.UpsertNode(kubernetes.NodeSnapshot{Identity: endpoint.NodeIdentity{Name: "node-a", UID: "node-1"}}); err != nil {
+		t.Fatal(err)
+	}
+	pod := handlerPod()
+	if err := store.UpsertPod(pod); err != nil {
+		t.Fatal(err)
+	}
+	events := []string{}
+	resolver := &localHandlerResolver{endpoint: handlerEndpoint("pod-1"), events: &events}
+	control := &localHandlerControl{events: &events}
+	scanner := &localHandlerScanner{events: &events}
+	scanner.onScan = func(call int) {
+		if call != 2 {
+			return
+		}
+		updated := pod
+		updated.PodIPv4 = netip.MustParseAddr("10.42.0.9")
+		updated.ResourceVersion = "2"
+		if err := store.UpsertPod(updated); err != nil {
+			t.Fatal(err)
+		}
+	}
+	publisher := &localHandlerPublisher{events: &events}
+	handler, err := NewLocalEndpointHandler(LocalEndpointHandlerConfig{
+		Store: store, Resolver: resolver, LocalNode: "node-a",
+		Desired: &localHandlerDesired{desired: reconcile.DesiredState{Enabled: true, Capability: discovery.CapabilityReport{Supported: true}}, events: &events},
+		Scanner: scanner, Control: control, Endpoint: &localHandlerEndpoint{events: &events}, Maps: &localHandlerMaps{events: &events}, Remover: localHandlerRemover{}, Ownership: &localHandlerOwnership{err: os.ErrNotExist}, Publisher: publisher, Generation: testLocalGeneration(control, scanner, publisher),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = handler.Handle(context.Background(), reconcile.ReconcileKey{Kind: reconcile.ReconcileLocalEndpoint, UID: "pod-1"})
+	var classified *reconcile.ClassifiedError
+	if !errors.As(err, &classified) || classified.Class() != reconcile.ErrorRetryable || classified.ReasonCode() != reconcile.ReasonEndpointSnapshotChanged {
+		t.Fatalf("pre-publish snapshot drift result: err=%v", err)
+	}
+	if publisher.desired.LocalEndpoints != nil || !reflect.DeepEqual(events, []string{"resolve", "desired", "disable", "scan", "endpoint", "maps", "scan"}) {
+		t.Fatalf("pre-publish snapshot drift was published: desired=%#v events=%v", publisher.desired, events)
 	}
 }
 
