@@ -402,9 +402,16 @@ func TestDynamicRuntimeKeepsUnsupportedPreflightDisabled(t *testing.T) {
 	if runtime.AgentState() != reconcile.AgentDisabled {
 		t.Fatalf("agent state = %s, want %s", runtime.AgentState(), reconcile.AgentDisabled)
 	}
+	snapshotDeadline := time.Now().Add(time.Second)
+	for runtime.SnapshotStore().Snapshot().State != reconcile.AgentDisabled && time.Now().Before(snapshotDeadline) {
+		time.Sleep(time.Millisecond)
+	}
 	snapshot := runtime.SnapshotStore().Snapshot()
 	if snapshot.State != reconcile.AgentDisabled || snapshot.Ready || snapshot.DatapathEnabled || snapshot.Reason != "CAPABILITY_UNSUPPORTED: BTF_MISSING: vmlinux BTF is unavailable" {
 		t.Fatalf("unsupported preflight snapshot = %+v", snapshot)
+	}
+	if !runtime.queue.ShuttingDown() {
+		t.Fatal("unsupported runtime left event queue running")
 	}
 	if published.Load() || control.HeartbeatCount() != 0 {
 		t.Fatalf("unsupported preflight started datapath work: published=%t heartbeats=%d", published.Load(), control.HeartbeatCount())

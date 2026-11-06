@@ -187,6 +187,7 @@ func (r *DynamicRuntime) Run(ctx context.Context) error {
 				return transitionErr
 			}
 			r.Status(ctx)
+			r.queue.ShutDown()
 			<-ctx.Done()
 			return r.components.Close()
 		}
