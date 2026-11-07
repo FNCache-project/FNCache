@@ -4,9 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
-
-	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
 )
 
 type HandlerConfig struct {
@@ -23,10 +20,14 @@ func NewHandler(config HandlerConfig, store *SnapshotStore) (*Handler, error) {
 	if store == nil {
 		return nil, fmt.Errorf("snapshot store is required")
 	}
+	metricsHandler, err := newMetricsHandler(store.Snapshot)
+	if err != nil {
+		return nil, fmt.Errorf("create metrics handler: %w", err)
+	}
 	h := &Handler{snapshot: store.Snapshot, debugState: config.DebugState, mux: http.NewServeMux()}
 	h.mux.HandleFunc("/livez", h.livez)
 	h.mux.HandleFunc("/readyz", h.readyz)
-	h.mux.HandleFunc("/metrics", h.metrics)
+	h.mux.Handle("/metrics", metricsHandler)
 	h.mux.HandleFunc("/debug/state", h.debug)
 	return h, nil
 }
@@ -48,27 +49,6 @@ func (h *Handler) readyz(w http.ResponseWriter, _ *http.Request) {
 		status = http.StatusOK
 	}
 	writeJSON(w, status, snapshot)
-}
-
-func (h *Handler) metrics(w http.ResponseWriter, _ *http.Request) {
-	snapshot := h.snapshot()
-	var b strings.Builder
-	b.WriteString("# TYPE oncache_agent_state gauge\n")
-	for _, state := range []reconcile.AgentState{reconcile.AgentBootstrapping, reconcile.AgentDisabled, reconcile.AgentReconciling, reconcile.AgentReady, reconcile.AgentDegraded, reconcile.AgentStopping} {
-		value := 0
-		if snapshot.State == state {
-			value = 1
-		}
-		_, _ = fmt.Fprintf(&b, "oncache_agent_state{state=%q} %d\n", state, value)
-	}
-	_, _ = fmt.Fprintf(&b, "oncache_datapath_enabled %d\n", boolValue(snapshot.DatapathEnabled))
-	_, _ = fmt.Fprintf(&b, "oncache_datapath_generation %d\n", snapshot.Generation)
-	_, _ = fmt.Fprintf(&b, "oncache_queue_depth %d\n", snapshot.QueueDepth)
-	_, _ = fmt.Fprintf(&b, "oncache_kube_api_healthy %d\n", boolValue(snapshot.APIHealthy))
-	_, _ = fmt.Fprintf(&b, "oncache_heartbeat_fresh %d\n", boolValue(snapshot.HeartbeatFresh))
-	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(b.String()))
 }
 
 func (h *Handler) debug(w http.ResponseWriter, r *http.Request) {
