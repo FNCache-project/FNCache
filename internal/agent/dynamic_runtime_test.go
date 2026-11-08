@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -22,6 +23,7 @@ import (
 	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
 	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/discovery"
 	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/flannel"
+	"github.com/cat-cc-Lcos/FNCache/internal/kubernetes"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
 )
 
@@ -164,6 +166,58 @@ func (c *dynamicRuntimeHeartbeatControl) HeartbeatCount() int {
 // DisableCount reports the number of recorded disable operations.
 func (c *dynamicRuntimeHeartbeatControl) DisableCount() int64 {
 	return c.disables.Load()
+}
+
+type dynamicRuntimeToggleEndpoints struct {
+	ready atomic.Bool
+}
+
+func (s *dynamicRuntimeToggleEndpoints) Scan(ctx context.Context, pods []endpoint.PodSnapshot) (endpoint.EndpointScanResult, error) {
+	if !s.ready.Load() {
+		return dynamicObserverSkippedEndpoints{}.Scan(ctx, pods)
+	}
+	return dynamicObserverEndpoints{}.Scan(ctx, pods)
+}
+
+func TestInitialObservationBackendRefreshesDesiredState(t *testing.T) {
+	store := kubernetes.NewSnapshotStore()
+	if err := store.UpsertNode(kubernetes.NodeSnapshot{Identity: endpoint.NodeIdentity{Name: "node-a", UID: "node-a"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertPod(endpoint.PodSnapshot{
+		Identity: endpoint.PodIdentity{Namespace: "default", Name: "local", UID: "pod-local"},
+		NodeName: "node-a", PodIPv4: netip.MustParseAddr("10.42.0.2"), Phase: "Running",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	endpoints := &dynamicRuntimeToggleEndpoints{}
+	observer, err := NewDynamicObserver(dynamicTestConfig(), store, controlplane.Sources{
+		Preflight: dynamicObserverPreflight{}, Flannel: dynamicObserverFlannel{}, Endpoints: endpoints,
+		Pins: dynamicObserverPins{}, TC: dynamicObserverTC{}, Rules: dynamicObserverRules{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := initialObservationBackend{observer: observer}
+	initial, err := backend.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := initial.EndpointScanSkipped["pod-local"]; !ok {
+		t.Fatalf("initial desired state did not record the unresolved endpoint: %+v", initial)
+	}
+
+	endpoints.ready.Store(true)
+	recovered, err := backend.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recovered.EndpointScanSkipped) != 0 {
+		t.Fatalf("refreshed desired state retained skipped endpoints: %+v", recovered.EndpointScanSkipped)
+	}
+	if _, ok := recovered.LocalEndpoints["pod-local"]; !ok {
+		t.Fatalf("refreshed desired state omitted recovered endpoint: %+v", recovered.LocalEndpoints)
+	}
 }
 
 func TestInitialReconcileRetryOnlyCoversEndpointNotReady(t *testing.T) {

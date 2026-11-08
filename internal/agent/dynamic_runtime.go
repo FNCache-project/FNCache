@@ -417,7 +417,7 @@ func (r *DynamicRuntime) reconcileInitial(ctx context.Context) error {
 		return fmt.Errorf("create initial endpoint remover: %w", err)
 	}
 	backend, err := controlplane.NewFirstPassBackend(controlplane.FirstPassBackendConfig{
-		Observer: initialObservationBackend{observer: r.observer, desired: desired}, Control: r.components.control, Collection: r.components.collection,
+		Observer: initialObservationBackend{observer: r.observer}, Control: r.components.control, Collection: r.components.collection,
 		Marker: r.components.marker, Base: r.components.base, Endpoint: r.components.endpoint,
 		Maps: r.components.maps, Ownership: r.components.ownership, Remover: remover,
 		Publisher: r.components.publisher,
@@ -465,11 +465,10 @@ func initialReconcileRetry(err error) (time.Duration, bool) {
 
 type initialObservationBackend struct {
 	observer *DynamicObserver
-	desired  reconcile.DesiredState
 }
 
-func (o initialObservationBackend) Discover(context.Context) (reconcile.DesiredState, error) {
-	return o.desired, nil
+func (o initialObservationBackend) Discover(ctx context.Context) (reconcile.DesiredState, error) {
+	return o.observer.Discover(ctx)
 }
 
 func (o initialObservationBackend) Scan(ctx context.Context) (reconcile.ActualState, error) {
