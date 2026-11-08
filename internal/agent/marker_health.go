@@ -13,7 +13,7 @@ import (
 
 var (
 	ErrMarkerUnhealthy = errors.New("MARKER_UNHEALTHY")
-	ErrMarkerDrift     = errors.New("MARKER_RULE_DRIFT")
+	ErrMarkerDrift     = controlplane.ErrMarkerDrift
 )
 
 type MarkerHealthMonitorConfig struct {
