@@ -78,20 +78,21 @@ func TestVerifyStateRequiresCompleteVerifiedObjects(t *testing.T) {
 
 func TestVerifyStateRejectsMarkerMismatch(t *testing.T) {
 	for _, test := range []struct {
-		name   string
-		update func(*reconcile.DesiredState, *reconcile.ActualState)
+		name      string
+		wantDrift bool
+		update    func(*reconcile.DesiredState, *reconcile.ActualState)
 	}{
-		{name: "missing marker", update: func(_ *reconcile.DesiredState, actual *reconcile.ActualState) { actual.FlannelRule.Present = false }},
-		{name: "missing hook", update: func(_ *reconcile.DesiredState, actual *reconcile.ActualState) {
+		{name: "missing marker", wantDrift: true, update: func(_ *reconcile.DesiredState, actual *reconcile.ActualState) { actual.FlannelRule.Present = false }},
+		{name: "missing hook", wantDrift: true, update: func(_ *reconcile.DesiredState, actual *reconcile.ActualState) {
 			actual.FlannelRule.JumpsPresent = false
 		}},
-		{name: "identity drift", update: func(_ *reconcile.DesiredState, actual *reconcile.ActualState) {
+		{name: "identity drift", wantDrift: true, update: func(_ *reconcile.DesiredState, actual *reconcile.ActualState) {
 			actual.FlannelRule.Identity = "ONCACHE/foreign-marker"
 		}},
-		{name: "fingerprint drift", update: func(_ *reconcile.DesiredState, actual *reconcile.ActualState) {
+		{name: "fingerprint drift", wantDrift: true, update: func(_ *reconcile.DesiredState, actual *reconcile.ActualState) {
 			actual.FlannelRule.Fingerprint = "foreign-rule"
 		}},
-		{name: "missing expectation", update: func(desired *reconcile.DesiredState, _ *reconcile.ActualState) {
+		{name: "missing expectation", wantDrift: false, update: func(desired *reconcile.DesiredState, _ *reconcile.ActualState) {
 			desired.Marker = reconcile.MarkerRuleExpectation{}
 		}},
 	} {
@@ -99,8 +100,12 @@ func TestVerifyStateRejectsMarkerMismatch(t *testing.T) {
 			desired := publishTestDesired()
 			actual := publishTestActual(desired)
 			test.update(&desired, &actual)
-			if err := VerifyState(desired, actual); err == nil {
+			err := VerifyState(desired, actual)
+			if err == nil {
 				t.Fatalf("marker mismatch was accepted: desired=%+v actual=%+v", desired.Marker, actual.FlannelRule)
+			}
+			if got := errors.Is(err, ErrMarkerDrift); got != test.wantDrift {
+				t.Fatalf("marker mismatch error identity = %t, want %t: %v", got, test.wantDrift, err)
 			}
 		})
 	}
