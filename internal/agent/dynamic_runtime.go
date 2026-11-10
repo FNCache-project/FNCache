@@ -452,6 +452,7 @@ func (r *DynamicRuntime) reconcileInitial(ctx context.Context) error {
 	}
 }
 
+// initialReconcileRetry classifies recoverable errors from the initial full reconciliation.
 func initialReconcileRetry(err error) (time.Duration, bool) {
 	if errors.Is(err, flannel.ErrDiscoveryNotReady) {
 		return time.Second, true

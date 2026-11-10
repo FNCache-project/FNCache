@@ -169,11 +169,18 @@ func (c *dynamicRuntimeHeartbeatControl) DisableCount() int64 {
 }
 
 type dynamicRuntimeToggleEndpoints struct {
-	ready atomic.Bool
+	ready      atomic.Bool
+	scans      atomic.Int32
+	sawSkipped atomic.Bool
+	readyAfter int32
 }
 
 func (s *dynamicRuntimeToggleEndpoints) Scan(ctx context.Context, pods []endpoint.PodSnapshot) (endpoint.EndpointScanResult, error) {
+	if scan := s.scans.Add(1); s.readyAfter > 0 && scan > s.readyAfter {
+		s.ready.Store(true)
+	}
 	if !s.ready.Load() {
+		s.sawSkipped.Store(true)
 		return dynamicObserverSkippedEndpoints{}.Scan(ctx, pods)
 	}
 	return dynamicObserverEndpoints{}.Scan(ctx, pods)
@@ -381,6 +388,58 @@ func TestDynamicRuntimeStartsKubernetesControlChain(t *testing.T) {
 	}
 	if err := runtime.Run(context.Background()); err == nil {
 		t.Fatal("restarting a stopped runtime unexpectedly succeeded")
+	}
+}
+
+// TestDynamicRuntimeRecoversInitialEndpointScan verifies the startup retry loop.
+func TestDynamicRuntimeRecoversInitialEndpointScan(t *testing.T) {
+	endpoints := &dynamicRuntimeToggleEndpoints{readyAfter: 4}
+	sources := controlplane.Sources{Preflight: dynamicObserverPreflight{}, Flannel: dynamicObserverFlannel{}, Endpoints: endpoints, Pins: dynamicRuntimePins{}, TC: dynamicRuntimeTC{}, Rules: dynamicObserverRules{}}
+	events := []string{}
+	published := &atomic.Bool{}
+	control := &dynamicRuntimeHeartbeatControl{localHandlerControl: &localHandlerControl{events: &events}}
+	cfg := dynamicTestConfig()
+	cfg.Heartbeat.Interval = config.Duration(10 * time.Millisecond)
+	factory := func(context.Context, datapathComponentConfig) (*datapathComponents, error) {
+		return dynamicRuntimeComponents(t, sources, control, &events, published), nil
+	}
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a", UID: types.UID("node-a")}}
+	runtime, err := newDynamicRuntimeWithFactory(cfg, fake.NewSimpleClientset(node), factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- runtime.Run(ctx) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for runtime.AgentState() != reconcile.AgentReady && time.Now().Before(deadline) {
+		select {
+		case err := <-done:
+			t.Fatalf("dynamic runtime stopped before recovering endpoint: %v", err)
+		default:
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if runtime.AgentState() != reconcile.AgentReady {
+		t.Fatalf("agent state = %s, want %s after endpoint recovery", runtime.AgentState(), reconcile.AgentReady)
+	}
+	if !endpoints.sawSkipped.Load() || !endpoints.ready.Load() {
+		t.Fatalf("endpoint scan did not cover skipped and ready states: scans=%d skipped=%t ready=%t", endpoints.scans.Load(), endpoints.sawSkipped.Load(), endpoints.ready.Load())
+	}
+	if !published.Load() {
+		t.Fatal("initial full reconciliation did not publish control state after endpoint recovery")
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("dynamic runtime shutdown returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("dynamic runtime did not stop")
 	}
 }
 
