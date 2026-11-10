@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -22,6 +23,7 @@ import (
 	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
 	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/discovery"
 	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/flannel"
+	"github.com/cat-cc-Lcos/FNCache/internal/kubernetes"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
 )
 
@@ -166,10 +168,73 @@ func (c *dynamicRuntimeHeartbeatControl) DisableCount() int64 {
 	return c.disables.Load()
 }
 
-func TestInitialReconcileRetryOnlyCoversEndpointNotReady(t *testing.T) {
+type dynamicRuntimeToggleEndpoints struct {
+	ready      atomic.Bool
+	scans      atomic.Int32
+	sawSkipped atomic.Bool
+	readyAfter int32
+}
+
+func (s *dynamicRuntimeToggleEndpoints) Scan(ctx context.Context, pods []endpoint.PodSnapshot) (endpoint.EndpointScanResult, error) {
+	if scan := s.scans.Add(1); s.readyAfter > 0 && scan > s.readyAfter {
+		s.ready.Store(true)
+	}
+	if !s.ready.Load() {
+		s.sawSkipped.Store(true)
+		return dynamicObserverSkippedEndpoints{}.Scan(ctx, pods)
+	}
+	return dynamicObserverEndpoints{}.Scan(ctx, pods)
+}
+
+func TestInitialObservationBackendRefreshesDesiredState(t *testing.T) {
+	store := kubernetes.NewSnapshotStore()
+	if err := store.UpsertNode(kubernetes.NodeSnapshot{Identity: endpoint.NodeIdentity{Name: "node-a", UID: "node-a"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertPod(endpoint.PodSnapshot{
+		Identity: endpoint.PodIdentity{Namespace: "default", Name: "local", UID: "pod-local"},
+		NodeName: "node-a", PodIPv4: netip.MustParseAddr("10.42.0.2"), Phase: "Running",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	endpoints := &dynamicRuntimeToggleEndpoints{}
+	observer, err := NewDynamicObserver(dynamicTestConfig(), store, controlplane.Sources{
+		Preflight: dynamicObserverPreflight{}, Flannel: dynamicObserverFlannel{}, Endpoints: endpoints,
+		Pins: dynamicObserverPins{}, TC: dynamicObserverTC{}, Rules: dynamicObserverRules{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := initialObservationBackend{observer: observer}
+	initial, err := backend.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := initial.EndpointScanSkipped["pod-local"]; !ok {
+		t.Fatalf("initial desired state did not record the unresolved endpoint: %+v", initial)
+	}
+
+	endpoints.ready.Store(true)
+	recovered, err := backend.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recovered.EndpointScanSkipped) != 0 {
+		t.Fatalf("refreshed desired state retained skipped endpoints: %+v", recovered.EndpointScanSkipped)
+	}
+	if _, ok := recovered.LocalEndpoints["pod-local"]; !ok {
+		t.Fatalf("refreshed desired state omitted recovered endpoint: %+v", recovered.LocalEndpoints)
+	}
+}
+
+func TestInitialReconcileRetryCoversEndpointAndFlannelNotReady(t *testing.T) {
 	endpointErr := reconcile.NewClassifiedError(reconcile.ErrorRetryable, reconcile.ReasonEndpointNotReady, 2*time.Second, errors.New("sandbox pending"))
 	if delay, retry := initialReconcileRetry(endpointErr); !retry || delay != 2*time.Second {
 		t.Fatalf("endpoint-not-ready error = delay %s retry %t, want 2s/true", delay, retry)
+	}
+	flannelErr := fmt.Errorf("discover Flannel: %w", flannel.ErrDiscoveryNotReady)
+	if delay, retry := initialReconcileRetry(flannelErr); !retry || delay != time.Second {
+		t.Fatalf("Flannel-not-ready error = delay %s retry %t, want 1s/true", delay, retry)
 	}
 	otherErr := reconcile.NewClassifiedError(reconcile.ErrorRetryable, reconcile.ReasonFlannelLinkMissing, 2*time.Second, errors.New("link missing"))
 	if delay, retry := initialReconcileRetry(otherErr); retry || delay != 0 {
@@ -323,6 +388,58 @@ func TestDynamicRuntimeStartsKubernetesControlChain(t *testing.T) {
 	}
 	if err := runtime.Run(context.Background()); err == nil {
 		t.Fatal("restarting a stopped runtime unexpectedly succeeded")
+	}
+}
+
+// TestDynamicRuntimeRecoversInitialEndpointScan verifies the startup retry loop.
+func TestDynamicRuntimeRecoversInitialEndpointScan(t *testing.T) {
+	endpoints := &dynamicRuntimeToggleEndpoints{readyAfter: 4}
+	sources := controlplane.Sources{Preflight: dynamicObserverPreflight{}, Flannel: dynamicObserverFlannel{}, Endpoints: endpoints, Pins: dynamicRuntimePins{}, TC: dynamicRuntimeTC{}, Rules: dynamicObserverRules{}}
+	events := []string{}
+	published := &atomic.Bool{}
+	control := &dynamicRuntimeHeartbeatControl{localHandlerControl: &localHandlerControl{events: &events}}
+	cfg := dynamicTestConfig()
+	cfg.Heartbeat.Interval = config.Duration(10 * time.Millisecond)
+	factory := func(context.Context, datapathComponentConfig) (*datapathComponents, error) {
+		return dynamicRuntimeComponents(t, sources, control, &events, published), nil
+	}
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a", UID: types.UID("node-a")}}
+	runtime, err := newDynamicRuntimeWithFactory(cfg, fake.NewSimpleClientset(node), factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- runtime.Run(ctx) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for runtime.AgentState() != reconcile.AgentReady && time.Now().Before(deadline) {
+		select {
+		case err := <-done:
+			t.Fatalf("dynamic runtime stopped before recovering endpoint: %v", err)
+		default:
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if runtime.AgentState() != reconcile.AgentReady {
+		t.Fatalf("agent state = %s, want %s after endpoint recovery", runtime.AgentState(), reconcile.AgentReady)
+	}
+	if !endpoints.sawSkipped.Load() || !endpoints.ready.Load() {
+		t.Fatalf("endpoint scan did not cover skipped and ready states: scans=%d skipped=%t ready=%t", endpoints.scans.Load(), endpoints.sawSkipped.Load(), endpoints.ready.Load())
+	}
+	if !published.Load() {
+		t.Fatal("initial full reconciliation did not publish control state after endpoint recovery")
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("dynamic runtime shutdown returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("dynamic runtime did not stop")
 	}
 }
 
