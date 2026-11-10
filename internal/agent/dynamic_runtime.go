@@ -453,6 +453,9 @@ func (r *DynamicRuntime) reconcileInitial(ctx context.Context) error {
 }
 
 func initialReconcileRetry(err error) (time.Duration, bool) {
+	if errors.Is(err, flannel.ErrDiscoveryNotReady) {
+		return time.Second, true
+	}
 	var classified *reconcile.ClassifiedError
 	if !errors.As(err, &classified) || classified.Class() != reconcile.ErrorRetryable || classified.ReasonCode() != reconcile.ReasonEndpointNotReady {
 		return 0, false

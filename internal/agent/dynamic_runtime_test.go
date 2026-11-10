@@ -220,10 +220,14 @@ func TestInitialObservationBackendRefreshesDesiredState(t *testing.T) {
 	}
 }
 
-func TestInitialReconcileRetryOnlyCoversEndpointNotReady(t *testing.T) {
+func TestInitialReconcileRetryCoversEndpointAndFlannelNotReady(t *testing.T) {
 	endpointErr := reconcile.NewClassifiedError(reconcile.ErrorRetryable, reconcile.ReasonEndpointNotReady, 2*time.Second, errors.New("sandbox pending"))
 	if delay, retry := initialReconcileRetry(endpointErr); !retry || delay != 2*time.Second {
 		t.Fatalf("endpoint-not-ready error = delay %s retry %t, want 2s/true", delay, retry)
+	}
+	flannelErr := fmt.Errorf("discover Flannel: %w", flannel.ErrDiscoveryNotReady)
+	if delay, retry := initialReconcileRetry(flannelErr); !retry || delay != time.Second {
+		t.Fatalf("Flannel-not-ready error = delay %s retry %t, want 1s/true", delay, retry)
 	}
 	otherErr := reconcile.NewClassifiedError(reconcile.ErrorRetryable, reconcile.ReasonFlannelLinkMissing, 2*time.Second, errors.New("link missing"))
 	if delay, retry := initialReconcileRetry(otherErr); retry || delay != 0 {
