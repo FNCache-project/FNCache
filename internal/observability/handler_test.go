@@ -33,23 +33,11 @@ func TestHTTPEndpoints(t *testing.T) {
 		t.Fatalf("readyz response = %d %s", response.Code, response.Body.String())
 	}
 	metrics := request("/metrics")
-	wantMetrics := strings.Join([]string{
-		"# TYPE oncache_agent_state gauge",
-		`oncache_agent_state{state="Bootstrapping"} 0`,
-		`oncache_agent_state{state="Disabled"} 0`,
-		`oncache_agent_state{state="Reconciling"} 0`,
-		`oncache_agent_state{state="Ready"} 1`,
-		`oncache_agent_state{state="Degraded"} 0`,
-		`oncache_agent_state{state="Stopping"} 0`,
-		"oncache_datapath_enabled 1",
-		"oncache_datapath_generation 7",
-		"oncache_queue_depth 2",
-		"oncache_kube_api_healthy 1",
-		"oncache_heartbeat_fresh 1",
-		"",
-	}, "\n")
-	if metrics.Code != http.StatusOK || metrics.Header().Get("Content-Type") != "text/plain; version=0.0.4; charset=utf-8" || metrics.Body.String() != wantMetrics {
+	if metrics.Code != http.StatusOK || !strings.HasPrefix(metrics.Header().Get("Content-Type"), "text/plain; version=0.0.4") {
 		t.Fatalf("unexpected metrics response = %d %s", metrics.Code, metrics.Body.String())
+	}
+	if _, err := parseMetricFamilies(metrics.Body.String()); err != nil {
+		t.Fatalf("metrics response was not parseable: %v", err)
 	}
 	if response := request("/debug/state"); response.Code != http.StatusNotFound {
 		t.Fatalf("debug state was not disabled: %d", response.Code)

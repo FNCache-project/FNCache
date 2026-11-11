@@ -4,6 +4,9 @@ ARG GO_VERSION=1.26
 
 FROM golang:${GO_VERSION}-bookworm AS agent-build
 
+ARG VERSION=dev
+ARG VCS_REF=unknown
+
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -11,7 +14,7 @@ COPY cmd ./cmd
 COPY internal ./internal
 
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-    go build -trimpath -ldflags="-s -w" -o /out/oncache-agent ./cmd/oncache-agent
+    go build -trimpath -ldflags="-s -w -X github.com/cat-cc-Lcos/FNCache/internal/observability.BuildVersion=${VERSION} -X github.com/cat-cc-Lcos/FNCache/internal/observability.BuildRevision=${VCS_REF}" -o /out/oncache-agent ./cmd/oncache-agent
 
 FROM ubuntu:24.04 AS bpf-build
 
