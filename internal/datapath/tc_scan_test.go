@@ -96,3 +96,19 @@ func TestTCScannerAllowsEmptyLinks(t *testing.T) {
 		t.Fatalf("unexpected empty scan: actual=%+v err=%v", actual, err)
 	}
 }
+
+func TestTCScannerTreatsMissingNetNSAsMissing(t *testing.T) {
+	manager, err := NewTCManagerWithNetNS(&scanTCBackend{}, NewNetNSManager())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanner, err := NewTCScanner(manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := endpoint.LinkIdentity{IfIndex: 7, NetNSInode: 42, NetNSPath: t.TempDir() + "/missing-netns"}
+	actual, err := scanner.Scan(context.Background(), []endpoint.LinkIdentity{link})
+	if err != nil || len(actual.Attachments) != 0 || len(actual.Conflicts) != 0 {
+		t.Fatalf("missing netns was not treated as missing: actual=%+v err=%v", actual, err)
+	}
+}
