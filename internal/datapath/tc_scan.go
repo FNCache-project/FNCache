@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
@@ -44,8 +45,7 @@ func (s *TCScanner) Scan(ctx context.Context, links []endpoint.LinkIdentity) (re
 		}
 		filters, err := s.manager.ListFilters(ctx, link)
 		if err != nil {
-			var notFound netlink.LinkNotFoundError
-			if errors.As(err, &notFound) {
+			if isMissingTCLinkError(err) {
 				continue
 			}
 			return reconcile.ActualState{}, fmt.Errorf("scan TC filters on ifindex %d: %w", link.IfIndex, err)
@@ -67,6 +67,11 @@ func (s *TCScanner) Scan(ctx context.Context, links []endpoint.LinkIdentity) (re
 		}
 	}
 	return actual, nil
+}
+
+func isMissingTCLinkError(err error) bool {
+	var notFound netlink.LinkNotFoundError
+	return errors.As(err, &notFound) || errors.Is(err, os.ErrNotExist)
 }
 
 func tcFilterIdentity(filter TCFilterState) string {
