@@ -70,21 +70,30 @@ func TestEndpointReuseGuardRetriesUnreadyCandidate(t *testing.T) {
 	}
 }
 
-func TestEndpointReuseGuardSkipsTerminalCandidates(t *testing.T) {
-	for _, phase := range []string{"Succeeded", "Failed"} {
-		t.Run(phase, func(t *testing.T) {
+func TestEndpointReuseGuardSkipsIneligiblePods(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*endpoint.PodSnapshot)
+	}{
+		{name: "Succeeded", mutate: func(pod *endpoint.PodSnapshot) { pod.Phase = "Succeeded" }},
+		{name: "Failed", mutate: func(pod *endpoint.PodSnapshot) { pod.Phase = "Failed" }},
+		{name: "HostNetwork", mutate: func(pod *endpoint.PodSnapshot) { pod.HostNetwork = true }},
+		{name: "Deleting", mutate: func(pod *endpoint.PodSnapshot) { pod.Deleting = true }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
 			owned := reuseOwned()
 			pod := handlerPod()
-			pod.Identity.UID = "pod-terminal"
-			pod.PodIPv4 = netip.MustParseAddr("10.42.0.3")
-			pod.Phase = phase
+			pod.Identity.UID = "pod-ineligible"
+			pod.PodIPv4 = owned.PodIPv4
+			test.mutate(&pod)
 			events := []string{}
 			guard, _ := NewEndpointReuseGuard(&localHandlerResolver{err: endpoint.ErrEndpointNotReady, events: &events}, "node-a")
 			if err := guard.Check(context.Background(), reuseSnapshot(pod), owned.PodUID, owned); err != nil {
-				t.Fatalf("terminal candidate blocked cleanup: %v", err)
+				t.Fatalf("ineligible Pod blocked cleanup: %v", err)
 			}
 			if len(events) != 0 {
-				t.Fatalf("terminal candidate was resolved: %v", events)
+				t.Fatalf("ineligible Pod was resolved: %v", events)
 			}
 		})
 	}
