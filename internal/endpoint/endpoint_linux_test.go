@@ -59,6 +59,15 @@ func TestResolveEndpointBuildsStableLinkIdentity(t *testing.T) {
 	}
 }
 
+func TestResolveEndpointAllowsSameIfIndexAcrossNamespaces(t *testing.T) {
+	sandbox := &fakeSandboxResolver{infos: []SandboxInfo{endpointTestSandbox("sandbox-1"), endpointTestSandbox("sandbox-1")}}
+	probe := &fakeLinkProbe{peer: LinkIdentity{IfIndex: 7, IfName: "eth0"}, iflink: 7, host: LinkIdentity{IfIndex: 7, IfName: "vethweb"}}
+	endpoint, err := endpointTestResolver(sandbox, probe).Resolve(context.Background(), endpointTestPod())
+	if err != nil || endpoint.PeerLink.NetNSInode != 42 || endpoint.PeerLink.IfIndex != 7 || endpoint.HostLink.IfIndex != 7 {
+		t.Fatalf("unexpected endpoint for reused ifindex across namespaces: endpoint=%+v err=%v", endpoint, err)
+	}
+}
+
 func TestResolveEndpointRejectsInvalidPodSnapshots(t *testing.T) {
 	for name, mutate := range map[string]func(*PodSnapshot){
 		"host network": func(p *PodSnapshot) { p.HostNetwork = true },
