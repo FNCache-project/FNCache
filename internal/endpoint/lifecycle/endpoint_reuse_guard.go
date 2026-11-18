@@ -28,7 +28,7 @@ func (g *EndpointReuseGuard) Check(ctx context.Context, snapshot kubernetes.Snap
 		return reconcile.NewClassifiedError(reconcile.ErrorRetryable, reconcile.ReasonPodIPReusePending, 0, nil)
 	}
 	for uid, pod := range snapshot.Pods {
-		if uid == deletedUID || pod.NodeName != g.localNode || pod.HostNetwork || pod.Deleting || isTerminalPodPhase(pod.Phase) {
+		if uid == deletedUID || pod.NodeName != g.localNode || !isEndpointReuseEligible(pod) {
 			continue
 		}
 		resolved, err := g.resolver.Resolve(ctx, pod)
@@ -57,12 +57,16 @@ func sameOwnedLinkIdentity(endpoint endpoint.Endpoint, owned reconcile.OwnedEndp
 	return samePeer || sameHost
 }
 
+func isEndpointReuseEligible(pod endpoint.PodSnapshot) bool {
+	return !pod.HostNetwork && !pod.Deleting && !isTerminalPodPhase(pod.Phase)
+}
+
 func hasPodIPReuse(snapshot kubernetes.Snapshot, deletedUID string, podIP netip.Addr) bool {
 	if !podIP.IsValid() || !podIP.Is4() {
 		return false
 	}
 	for uid, pod := range snapshot.Pods {
-		if uid != deletedUID && !pod.Deleting && pod.PodIPv4 == podIP {
+		if uid != deletedUID && isEndpointReuseEligible(pod) && pod.PodIPv4 == podIP {
 			return true
 		}
 	}
