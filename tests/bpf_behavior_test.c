@@ -5,7 +5,6 @@
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/pkt_cls.h>
-#include <netinet/ip.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
