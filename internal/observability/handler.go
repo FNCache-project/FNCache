@@ -4,10 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 type HandlerConfig struct {
 	DebugState bool
+	Collectors []prometheus.Collector
 }
 
 type Handler struct {
@@ -20,7 +23,7 @@ func NewHandler(config HandlerConfig, store *SnapshotStore) (*Handler, error) {
 	if store == nil {
 		return nil, fmt.Errorf("snapshot store is required")
 	}
-	metricsHandler, err := newMetricsHandler(store.Snapshot)
+	metricsHandler, err := newMetricsHandler(store.Snapshot, config.Collectors...)
 	if err != nil {
 		return nil, fmt.Errorf("create metrics handler: %w", err)
 	}

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
+	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
@@ -98,6 +99,19 @@ func TestMetricsUseIndependentRegistries(t *testing.T) {
 	}
 	if _, err := second.registry.Gather(); err != nil {
 		t.Fatalf("second registry gather failed: %v", err)
+	}
+}
+
+func TestMetricsRegisterAdditionalCollectors(t *testing.T) {
+	store := NewSnapshotStore(Snapshot{State: reconcile.AgentDisabled})
+	extra := &testExtraCollector{desc: prometheus.NewDesc("oncache_test_extra", "test extra metric", nil, nil)}
+	m, err := newMetrics(store.Snapshot, buildInfo{}, extra)
+	if err != nil {
+		t.Fatal(err)
+	}
+	families := scrapeMetricFamilies(t, m.handler)
+	if _, ok := families["oncache_test_extra"]; !ok {
+		t.Fatal("additional collector was not registered")
 	}
 }
 
@@ -241,4 +255,14 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+type testExtraCollector struct {
+	desc *prometheus.Desc
+}
+
+func (c *testExtraCollector) Describe(ch chan<- *prometheus.Desc) { ch <- c.desc }
+
+func (c *testExtraCollector) Collect(ch chan<- prometheus.Metric) {
+	ch <- prometheus.MustNewConstMetric(c.desc, prometheus.GaugeValue, 1)
 }

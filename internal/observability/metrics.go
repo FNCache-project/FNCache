@@ -108,19 +108,19 @@ type snapshotCollector struct {
 	buildInfo          *prometheus.Desc
 }
 
-func newMetricsHandler(snapshot func() Snapshot) (http.Handler, error) {
+func newMetricsHandler(snapshot func() Snapshot, collectors ...prometheus.Collector) (http.Handler, error) {
 	m, err := newMetrics(snapshot, buildInfo{
 		version:   BuildVersion,
 		revision:  BuildRevision,
 		goVersion: runtime.Version(),
-	})
+	}, collectors...)
 	if err != nil {
 		return nil, err
 	}
 	return m.handler, nil
 }
 
-func newMetrics(snapshot func() Snapshot, build buildInfo) (*metrics, error) {
+func newMetrics(snapshot func() Snapshot, build buildInfo, collectors ...prometheus.Collector) (*metrics, error) {
 	if snapshot == nil {
 		return nil, fmt.Errorf("snapshot function is required")
 	}
@@ -128,6 +128,14 @@ func newMetrics(snapshot func() Snapshot, build buildInfo) (*metrics, error) {
 	registry := prometheus.NewRegistry()
 	if err := registry.Register(collector); err != nil {
 		return nil, fmt.Errorf("register snapshot collector: %w", err)
+	}
+	for _, extra := range collectors {
+		if extra == nil {
+			continue
+		}
+		if err := registry.Register(extra); err != nil {
+			return nil, fmt.Errorf("register additional collector: %w", err)
+		}
 	}
 	return &metrics{
 		registry: registry,

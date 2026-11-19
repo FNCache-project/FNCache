@@ -48,3 +48,6 @@ data:
       enabled: {{ .Values.config.features.enabled }}
       debugState: {{ .Values.config.features.debugState }}
       cleanupOnShutdown: {{ .Values.config.features.cleanupOnShutdown }}
+    observability:
+      datapathCounters:
+        enabled: {{ .Values.config.observability.datapathCounters.enabled }}

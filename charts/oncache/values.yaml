@@ -52,6 +52,9 @@ config:
     enabled: true
     debugState: false
     cleanupOnShutdown: true
+  observability:
+    datapathCounters:
+      enabled: false
 
 rbac:
   create: true

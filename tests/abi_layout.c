@@ -2,6 +2,23 @@
 #include <stdio.h>
 
 #include "oncache_abi.h"
+#include "common_defines.h"
+
+_Static_assert(ONCACHE_STAT_INIT_E_POLICY_LOOKUP_MISS == 0, "stat init_e policy id");
+_Static_assert(ONCACHE_STAT_MASQ_POLICY_MISS == 1, "stat masq policy id");
+_Static_assert(ONCACHE_STAT_MASQ_EGRESSIP_MISS == 2, "stat masq egressip id");
+_Static_assert(ONCACHE_STAT_MASQ_EGRESS_CACHE_MISS == 3, "stat masq egress cache id");
+_Static_assert(ONCACHE_STAT_MASQ_INGRESS_NOT_READY == 4, "stat masq ingress id");
+_Static_assert(ONCACHE_STAT_MASQ_ADJUST_ROOM_FAIL == 5, "stat masq adjust id");
+_Static_assert(ONCACHE_STAT_RESTORE_POLICY_MISS == 6, "stat restore policy id");
+_Static_assert(ONCACHE_STAT_RESTORE_DEVINFO_MISMATCH == 7, "stat restore devinfo id");
+_Static_assert(ONCACHE_STAT_RESTORE_OUTER_IP_MISMATCH == 8, "stat restore outer ip id");
+_Static_assert(ONCACHE_STAT_RESTORE_POD_NOT_READY == 9, "stat restore pod id");
+_Static_assert(ONCACHE_STAT_RESTORE_EGRESSIP_MISS == 10, "stat restore egressip id");
+_Static_assert(ONCACHE_STAT_RESTORE_ADJUST_ROOM_FAIL == 11, "stat restore adjust id");
+_Static_assert(ONCACHE_STAT_INIT_IN_ENDPOINT_MISS == 12, "stat init_in endpoint id");
+_Static_assert(ONCACHE_STAT_INIT_IN_POLICY_LOOKUP_MISS == 13, "stat init_in policy id");
+_Static_assert(ONCACHE_STAT_COUNT == 14, "stat count");
 
 _Static_assert(sizeof(struct oncache_flow_v1) == 16, "flow size");
 _Static_assert(offsetof(struct oncache_flow_v1, local_addr) == 0, "flow local_addr");
