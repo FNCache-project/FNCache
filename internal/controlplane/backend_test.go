@@ -340,6 +340,44 @@ func TestFirstPassBackendStopsBeforeMutationWhenActualScanIsIncomplete(t *testin
 	}
 }
 
+func TestFirstPassBackendStopsBeforeMutationWhenEndpointIdentityIsIncomplete(t *testing.T) {
+	desired := publishTestDesired()
+	resolved := desired.LocalEndpoints["pod-a"]
+	resolved.HostLink.MAC = nil
+	desired.LocalEndpoints["pod-a"] = resolved
+	store := &fakeOwnershipCommitter{events: new([]string)}
+	publisher, err := NewPublisher(store, &fakeControlPublisher{events: store.events}, publishTestConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	collection := &backendCollection{}
+	marker := &backendMarker{}
+	base := &backendEnsurer{}
+	endpointEnsurer := &backendEnsurer{}
+	maps := &backendEnsurer{}
+	remover := &backendRemover{}
+	backend, err := NewFirstPassBackend(FirstPassBackendConfig{
+		Observer: &backendObserver{desired: desired, actual: publishTestActual(desired)}, Control: &backendControl{},
+		Collection: collection, Marker: marker, Base: base, Endpoint: endpointEnsurer, Maps: maps,
+		Ownership: store, Remover: remover, Publisher: publisher,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator, err := reconcile.NewCoordinator(backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := coordinator.FullReconcile(context.Background())
+	var classified *reconcile.ClassifiedError
+	if !errors.As(err, &classified) || classified.Class() != reconcile.ErrorRetryable || classified.ReasonCode() != reconcile.ReasonEndpointNotReady || result.State != reconcile.AgentDisabled {
+		t.Fatalf("incomplete endpoint identity was not blocked safely: result=%+v err=%v", result, err)
+	}
+	if collection.calls != 0 || marker.calls != 0 || base.calls != 0 || endpointEnsurer.calls != 0 || maps.calls != 0 || remover.calls != 0 || len(*store.events) != 0 {
+		t.Fatalf("incomplete endpoint identity reached a mutator: collection=%d marker=%d base=%d endpoint=%d maps=%d remover=%d events=%v", collection.calls, marker.calls, base.calls, endpointEnsurer.calls, maps.calls, remover.calls, *store.events)
+	}
+}
+
 func TestFirstPassBackendStopsBeforeDownstreamMutationWhenRescanIsIncomplete(t *testing.T) {
 	desired := publishTestDesired()
 	first := publishTestActual(desired)

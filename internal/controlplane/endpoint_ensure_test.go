@@ -57,6 +57,31 @@ func TestEndpointEnsurerValidatesProgramsBeforeWriting(t *testing.T) {
 	}
 }
 
+func TestEndpointEnsurerRejectsIncompleteLinkIdentityBeforeWriting(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*endpoint.Endpoint)
+	}{
+		{name: "empty peer MAC", mutate: func(resolved *endpoint.Endpoint) { resolved.PeerLink.MAC = nil }},
+		{name: "short host MAC", mutate: func(resolved *endpoint.Endpoint) { resolved.HostLink.MAC = []byte{2, 0, 0} }},
+		{name: "empty host name", mutate: func(resolved *endpoint.Endpoint) { resolved.HostLink.IfName = "" }},
+		{name: "host link in non-host namespace", mutate: func(resolved *endpoint.Endpoint) { resolved.HostLink.NetNSInode = 42 }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			backend := &fakeBaseTCBackend{}
+			tc, _ := datapath.NewTCManager(backend)
+			ensurer, _ := NewEndpointEnsurer(tc)
+			resolvedEndpoint := endpointEnsureTestEndpoint()
+			test.mutate(&resolvedEndpoint)
+			desired := reconcile.DesiredState{Enabled: true, LocalEndpoints: map[string]endpoint.Endpoint{resolvedEndpoint.Pod.UID: resolvedEndpoint}}
+			if _, err := ensurer.EnsureEndpoint(context.Background(), desired, endpointEnsureTestActualPrograms(), resolvedEndpoint); err == nil || len(backend.attached) != 0 {
+				t.Fatalf("incomplete link identity was not rejected before writes: err=%v attached=%+v", err, backend.attached)
+			}
+		})
+	}
+}
+
 func TestEndpointEnsurerDisabledIsNoOp(t *testing.T) {
 	backend := &fakeBaseTCBackend{}
 	tc, _ := datapath.NewTCManager(backend)
@@ -73,8 +98,8 @@ func endpointEnsureTestEndpoint() endpoint.Endpoint {
 	return endpoint.Endpoint{
 		Pod:  endpoint.PodIdentity{Namespace: "default", Name: "web", UID: "pod-a"},
 		Node: endpoint.NodeIdentity{Name: "node-a"}, PodIPv4: netip.MustParseAddr("10.244.1.10"), NetNSInode: 42,
-		PeerLink: endpoint.LinkIdentity{NetNSInode: 42, NetNSPath: "/proc/123/ns/net", IfIndex: 10, IfName: "eth0"},
-		HostLink: endpoint.LinkIdentity{IfIndex: 20, IfName: "vethweb"},
+		PeerLink: endpoint.LinkIdentity{NetNSInode: 42, NetNSPath: "/proc/123/ns/net", IfIndex: 10, IfName: "eth0", MAC: []byte{2, 0, 0, 0, 0, 2}},
+		HostLink: endpoint.LinkIdentity{IfIndex: 20, IfName: "vethweb", MAC: []byte{2, 0, 0, 0, 0, 3}},
 	}
 }
 

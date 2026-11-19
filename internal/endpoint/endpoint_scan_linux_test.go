@@ -29,7 +29,7 @@ func scanPod(uid, version string) PodSnapshot {
 }
 
 func scanEndpoint(uid string) Endpoint {
-	return Endpoint{Pod: PodIdentity{Namespace: "default", Name: uid, UID: uid}, Node: NodeIdentity{Name: "node-a"}, PodIPv4: netip.MustParseAddr("10.244.1.10"), NetNSInode: 42, PeerLink: LinkIdentity{NetNSInode: 42, IfIndex: 10, IfName: "eth0"}, HostLink: LinkIdentity{IfIndex: 20}}
+	return Endpoint{Pod: PodIdentity{Namespace: "default", Name: uid, UID: uid}, Node: NodeIdentity{Name: "node-a"}, PodIPv4: netip.MustParseAddr("10.244.1.10"), NetNSInode: 42, PeerLink: LinkIdentity{NetNSInode: 42, IfIndex: 10, IfName: "eth0", MAC: []byte{2, 0, 0, 0, 0, 2}}, HostLink: LinkIdentity{IfIndex: 20, IfName: "vethweb", MAC: []byte{2, 0, 0, 0, 0, 3}}}
 }
 
 func TestEndpointScannerCollectsReadyEndpoints(t *testing.T) {

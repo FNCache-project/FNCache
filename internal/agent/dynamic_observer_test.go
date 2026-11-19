@@ -28,7 +28,16 @@ func (dynamicObserverFlannel) Discover(context.Context, flannel.DiscoveryRequest
 type dynamicObserverEndpoints struct{}
 
 func (dynamicObserverEndpoints) Scan(context.Context, []endpoint.PodSnapshot) (endpoint.EndpointScanResult, error) {
-	return endpoint.EndpointScanResult{Endpoints: map[string]endpoint.Endpoint{"pod-local": {Pod: endpoint.PodIdentity{Namespace: "default", Name: "local", UID: "pod-local"}, Node: endpoint.NodeIdentity{Name: "node-a"}, PodIPv4: netip.MustParseAddr("10.42.0.2"), NetNSInode: 42, PeerLink: endpoint.LinkIdentity{NetNSInode: 42, IfIndex: 7}, HostLink: endpoint.LinkIdentity{IfIndex: 8}}}}, nil
+	return endpoint.EndpointScanResult{
+		Endpoints: map[string]endpoint.Endpoint{
+			"pod-local": {
+				Pod: endpoint.PodIdentity{Namespace: "default", Name: "local", UID: "pod-local"}, Node: endpoint.NodeIdentity{Name: "node-a"},
+				PodIPv4: netip.MustParseAddr("10.42.0.2"), NetNSInode: 42,
+				PeerLink: endpoint.LinkIdentity{NetNSInode: 42, IfIndex: 7, IfName: "eth0", MAC: []byte{2, 0, 0, 0, 0, 2}},
+				HostLink: endpoint.LinkIdentity{IfIndex: 8, IfName: "vethlocal", MAC: []byte{2, 0, 0, 0, 0, 3}},
+			},
+		},
+	}, nil
 }
 
 type dynamicObserverSkippedEndpoints struct{}
@@ -46,7 +55,7 @@ func (dynamicObserverTerminalEndpoints) Scan(_ context.Context, pods []endpoint.
 			continue
 		}
 		if pod.Phase == "Running" {
-			result.Endpoints[pod.Identity.UID] = endpoint.Endpoint{Pod: pod.Identity, Node: endpoint.NodeIdentity{Name: pod.NodeName}, PodIPv4: pod.PodIPv4, NetNSInode: 42, PeerLink: endpoint.LinkIdentity{NetNSInode: 42, IfIndex: 7}, HostLink: endpoint.LinkIdentity{IfIndex: 8}}
+			result.Endpoints[pod.Identity.UID] = endpoint.Endpoint{Pod: pod.Identity, Node: endpoint.NodeIdentity{Name: pod.NodeName}, PodIPv4: pod.PodIPv4, NetNSInode: 42, PeerLink: endpoint.LinkIdentity{NetNSInode: 42, IfIndex: 7, IfName: "eth0", MAC: []byte{2, 0, 0, 0, 0, 2}}, HostLink: endpoint.LinkIdentity{IfIndex: 8, IfName: "vethlocal", MAC: []byte{2, 0, 0, 0, 0, 3}}}
 			continue
 		}
 		result.Skipped[pod.Identity.UID] = endpoint.ErrEndpointNotReady

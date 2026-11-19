@@ -50,8 +50,13 @@ func (e Endpoint) Validate() error {
 	if !e.PodIPv4.IsValid() || !e.PodIPv4.Is4() {
 		return fmt.Errorf("endpoint must have a valid IPv4 address")
 	}
-	if e.NetNSInode == 0 || e.PeerLink.IfIndex <= 0 || e.HostLink.IfIndex <= 0 {
+	if e.NetNSInode == 0 || e.PeerLink.IfIndex <= 0 || e.HostLink.IfIndex <= 0 ||
+		e.PeerLink.IfName == "" || e.HostLink.IfName == "" ||
+		len(e.PeerLink.MAC) != 6 || len(e.HostLink.MAC) != 6 {
 		return fmt.Errorf("endpoint link identity is incomplete")
+	}
+	if e.PeerLink.NetNSInode != e.NetNSInode || e.HostLink.NetNSInode != 0 {
+		return fmt.Errorf("endpoint link namespace identity is inconsistent")
 	}
 	return nil
 }
