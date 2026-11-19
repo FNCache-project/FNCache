@@ -26,7 +26,7 @@ func handlerEndpoint(uid string) endpoint.Endpoint {
 	return endpoint.Endpoint{
 		Pod:  endpoint.PodIdentity{Namespace: "default", Name: "web", UID: uid},
 		Node: endpoint.NodeIdentity{Name: "node-a"}, PodIPv4: netip.MustParseAddr("10.42.0.2"), NetNSInode: 42,
-		PeerLink: endpoint.LinkIdentity{NetNSInode: 42, IfIndex: 2}, HostLink: endpoint.LinkIdentity{IfIndex: 3},
+		PeerLink: endpoint.LinkIdentity{NetNSInode: 42, IfIndex: 2, IfName: "eth0", MAC: []byte{2, 0, 0, 0, 0, 2}}, HostLink: endpoint.LinkIdentity{IfIndex: 3, IfName: "vethweb", MAC: []byte{2, 0, 0, 0, 0, 3}},
 	}
 }
 

@@ -14,7 +14,7 @@ func desiredPod(uid, node string, ip netip.Addr) endpoint.PodSnapshot {
 }
 
 func desiredEndpoint(uid string) endpoint.Endpoint {
-	return endpoint.Endpoint{Pod: endpoint.PodIdentity{Namespace: "default", Name: uid, UID: uid}, Node: endpoint.NodeIdentity{Name: "node-a"}, PodIPv4: netip.MustParseAddr("10.42.0.2"), NetNSInode: 42, PeerLink: endpoint.LinkIdentity{NetNSInode: 42, IfIndex: 2, MAC: []byte{1, 2, 3}}, HostLink: endpoint.LinkIdentity{IfIndex: 3, MAC: []byte{4, 5, 6}}}
+	return endpoint.Endpoint{Pod: endpoint.PodIdentity{Namespace: "default", Name: uid, UID: uid}, Node: endpoint.NodeIdentity{Name: "node-a"}, PodIPv4: netip.MustParseAddr("10.42.0.2"), NetNSInode: 42, PeerLink: endpoint.LinkIdentity{NetNSInode: 42, IfIndex: 2, IfName: "eth0", MAC: []byte{1, 2, 3, 4, 5, 6}}, HostLink: endpoint.LinkIdentity{IfIndex: 3, IfName: "vethweb", MAC: []byte{4, 5, 6, 7, 8, 9}}}
 }
 
 func TestBuildDesiredStateSeparatesPodsAndResolvedEndpoints(t *testing.T) {

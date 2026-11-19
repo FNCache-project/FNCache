@@ -52,7 +52,7 @@ func endpointTestResolver(sandbox SandboxResolver, probe LinkProbe) *LinuxEndpoi
 
 func TestResolveEndpointBuildsStableLinkIdentity(t *testing.T) {
 	sandbox := &fakeSandboxResolver{infos: []SandboxInfo{endpointTestSandbox("sandbox-1"), endpointTestSandbox("sandbox-1")}}
-	probe := &fakeLinkProbe{peer: LinkIdentity{IfIndex: 10, IfName: "eth0"}, iflink: 20, host: LinkIdentity{IfIndex: 20, IfName: "vethweb"}}
+	probe := &fakeLinkProbe{peer: LinkIdentity{IfIndex: 10, IfName: "eth0", MAC: []byte{2, 0, 0, 0, 0, 2}}, iflink: 20, host: LinkIdentity{IfIndex: 20, IfName: "vethweb", MAC: []byte{2, 0, 0, 0, 0, 3}}}
 	endpoint, err := endpointTestResolver(sandbox, probe).Resolve(context.Background(), endpointTestPod())
 	if err != nil || endpoint.SandboxID != "sandbox-1" || endpoint.PeerLink.NetNSInode != 42 || endpoint.PeerLink.NetNSPath != "/proc/123/ns/net" || endpoint.HostLink.IfIndex != 20 || endpoint.ObservedAt.Unix() != 10 {
 		t.Fatalf("unexpected endpoint: endpoint=%+v err=%v", endpoint, err)
@@ -61,10 +61,36 @@ func TestResolveEndpointBuildsStableLinkIdentity(t *testing.T) {
 
 func TestResolveEndpointAllowsSameIfIndexAcrossNamespaces(t *testing.T) {
 	sandbox := &fakeSandboxResolver{infos: []SandboxInfo{endpointTestSandbox("sandbox-1"), endpointTestSandbox("sandbox-1")}}
-	probe := &fakeLinkProbe{peer: LinkIdentity{IfIndex: 7, IfName: "eth0"}, iflink: 7, host: LinkIdentity{IfIndex: 7, IfName: "vethweb"}}
+	probe := &fakeLinkProbe{peer: LinkIdentity{IfIndex: 7, IfName: "eth0", MAC: []byte{2, 0, 0, 0, 0, 2}}, iflink: 7, host: LinkIdentity{IfIndex: 7, IfName: "vethweb", MAC: []byte{2, 0, 0, 0, 0, 3}}}
 	endpoint, err := endpointTestResolver(sandbox, probe).Resolve(context.Background(), endpointTestPod())
 	if err != nil || endpoint.PeerLink.NetNSInode != 42 || endpoint.PeerLink.IfIndex != 7 || endpoint.HostLink.IfIndex != 7 {
 		t.Fatalf("unexpected endpoint for reused ifindex across namespaces: endpoint=%+v err=%v", endpoint, err)
+	}
+}
+
+func TestResolveEndpointRejectsIncompleteLinkIdentity(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*fakeLinkProbe)
+	}{
+		{name: "empty peer MAC", mutate: func(probe *fakeLinkProbe) { probe.peer.MAC = nil }},
+		{name: "short host MAC", mutate: func(probe *fakeLinkProbe) { probe.host.MAC = []byte{2, 0, 0} }},
+		{name: "empty host name", mutate: func(probe *fakeLinkProbe) { probe.host.IfName = "" }},
+		{name: "host link in non-host namespace", mutate: func(probe *fakeLinkProbe) { probe.host.NetNSInode = 42 }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sandbox := &fakeSandboxResolver{infos: []SandboxInfo{endpointTestSandbox("sandbox-1"), endpointTestSandbox("sandbox-1")}}
+			probe := &fakeLinkProbe{
+				peer:   LinkIdentity{IfIndex: 10, IfName: "eth0", MAC: []byte{2, 0, 0, 0, 0, 2}},
+				iflink: 20,
+				host:   LinkIdentity{IfIndex: 20, IfName: "vethweb", MAC: []byte{2, 0, 0, 0, 0, 3}},
+			}
+			test.mutate(probe)
+			if _, err := endpointTestResolver(sandbox, probe).Resolve(context.Background(), endpointTestPod()); !errors.Is(err, ErrEndpointNotReady) {
+				t.Fatalf("incomplete link identity was not rejected as not ready: %v", err)
+			}
+		})
 	}
 }
 
@@ -98,7 +124,7 @@ func TestResolveEndpointRetriesUntilPodIPIsAssigned(t *testing.T) {
 
 func TestResolveEndpointRejectsSandboxDrift(t *testing.T) {
 	sandbox := &fakeSandboxResolver{infos: []SandboxInfo{endpointTestSandbox("sandbox-1"), endpointTestSandbox("sandbox-2")}}
-	probe := &fakeLinkProbe{peer: LinkIdentity{IfIndex: 10, IfName: "eth0"}, iflink: 20, host: LinkIdentity{IfIndex: 20, IfName: "vethweb"}}
+	probe := &fakeLinkProbe{peer: LinkIdentity{IfIndex: 10, IfName: "eth0", MAC: []byte{2, 0, 0, 0, 0, 2}}, iflink: 20, host: LinkIdentity{IfIndex: 20, IfName: "vethweb", MAC: []byte{2, 0, 0, 0, 0, 3}}}
 	if _, err := endpointTestResolver(sandbox, probe).Resolve(context.Background(), endpointTestPod()); !errors.Is(err, ErrStaleObject) {
 		t.Fatalf("expected stale sandbox error: %v", err)
 	}

@@ -114,7 +114,7 @@ func (r *LinuxEndpointResolver) Validate(ctx context.Context, endpoint Endpoint)
 		return err
 	}
 	if err := endpoint.Validate(); err != nil {
-		return err
+		return fmt.Errorf("%w: %v", ErrEndpointNotReady, err)
 	}
 	sameLink := endpoint.PeerLink.NetNSInode == endpoint.HostLink.NetNSInode && endpoint.PeerLink.IfIndex == endpoint.HostLink.IfIndex
 	if endpoint.PeerLink.NetNSInode != endpoint.NetNSInode || endpoint.PeerLink.IfName != "eth0" || sameLink {
@@ -158,8 +158,8 @@ func (p linuxLinkProbe) PodEth0(ctx context.Context) (LinkIdentity, int, error) 
 		return LinkIdentity{}, 0, fmt.Errorf("%w: find Pod eth0: %v", ErrEndpointNotReady, err)
 	}
 	attrs := link.Attrs()
-	if attrs == nil || attrs.Index <= 0 {
-		return LinkIdentity{}, 0, fmt.Errorf("%w: Pod eth0 identity is incomplete", ErrUnsupported)
+	if attrs == nil || attrs.Index <= 0 || attrs.Name == "" || len(attrs.HardwareAddr) != 6 {
+		return LinkIdentity{}, 0, fmt.Errorf("%w: Pod eth0 identity is incomplete", ErrEndpointNotReady)
 	}
 	iflink := attrs.ParentIndex
 	if iflink <= 0 {
@@ -184,8 +184,8 @@ func (p linuxLinkProbe) HostVeth(ctx context.Context, iflink int) (LinkIdentity,
 		return LinkIdentity{}, fmt.Errorf("%w: find host veth %d: %v", ErrEndpointNotReady, iflink, err)
 	}
 	attrs := link.Attrs()
-	if attrs == nil || attrs.Index != iflink {
-		return LinkIdentity{}, fmt.Errorf("%w: host veth identity is incomplete", ErrUnsupported)
+	if attrs == nil || attrs.Index != iflink || attrs.Name == "" || len(attrs.HardwareAddr) != 6 {
+		return LinkIdentity{}, fmt.Errorf("%w: host veth identity is incomplete", ErrEndpointNotReady)
 	}
 	return LinkIdentity{IfIndex: attrs.Index, IfName: attrs.Name, MAC: cloneMAC(attrs.HardwareAddr)}, nil
 }

@@ -143,6 +143,9 @@ func (b *FirstPassBackend) Ensure(ctx context.Context, desired reconcile.Desired
 	if err := validateActualEndpointScanCompleteness(actual); err != nil {
 		return false, err
 	}
+	if err := validateDesiredEndpointIdentities(desired); err != nil {
+		return false, err
+	}
 	ownershipState, hasOwnership, err := b.loadOwnership(ctx)
 	if err != nil {
 		return false, err
@@ -197,6 +200,26 @@ func (b *FirstPassBackend) Ensure(ctx context.Context, desired reconcile.Desired
 		changed = changed || mapChanged
 	}
 	return changed, nil
+}
+
+func validateDesiredEndpointIdentities(desired reconcile.DesiredState) error {
+	uids := make([]string, 0, len(desired.LocalEndpoints))
+	for uid := range desired.LocalEndpoints {
+		uids = append(uids, uid)
+	}
+	sort.Strings(uids)
+	for _, uid := range uids {
+		resolved := desired.LocalEndpoints[uid]
+		if err := resolved.Validate(); err != nil {
+			return reconcile.NewClassifiedError(
+				reconcile.ErrorRetryable,
+				reconcile.ReasonEndpointNotReady,
+				0,
+				fmt.Errorf("validate local endpoint %s: %w", uid, err),
+			)
+		}
+	}
+	return nil
 }
 
 func (b *FirstPassBackend) loadOwnership(ctx context.Context) (reconcile.OwnershipState, bool, error) {
