@@ -116,7 +116,8 @@ func (r *LinuxEndpointResolver) Validate(ctx context.Context, endpoint Endpoint)
 	if err := endpoint.Validate(); err != nil {
 		return err
 	}
-	if endpoint.PeerLink.NetNSInode != endpoint.NetNSInode || endpoint.PeerLink.IfName != "eth0" || endpoint.PeerLink.IfIndex == endpoint.HostLink.IfIndex {
+	sameLink := endpoint.PeerLink.NetNSInode == endpoint.HostLink.NetNSInode && endpoint.PeerLink.IfIndex == endpoint.HostLink.IfIndex
+	if endpoint.PeerLink.NetNSInode != endpoint.NetNSInode || endpoint.PeerLink.IfName != "eth0" || sameLink {
 		return fmt.Errorf("%w: endpoint link identity is inconsistent", ErrUnsupported)
 	}
 	return nil
