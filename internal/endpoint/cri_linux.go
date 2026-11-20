@@ -56,6 +56,30 @@ func newCRISandboxResolver(client CRIRuntimeClient, stat func(string) (uint64, e
 	return &CRISandboxResolver{client: client, stat: stat}, nil
 }
 
+func dialCRIConnection(ctx context.Context, path string) (*grpc.ClientConn, error) {
+	dialer := func(ctx context.Context, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", path)
+	}
+	return grpc.DialContext(ctx, "passthrough:///oncache-cri", grpc.WithContextDialer(dialer), grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock())
+}
+
+func probeContainerdCRI(ctx context.Context, path string) error {
+	if _, err := unixSocketPath(path); err != nil {
+		return err
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, runtimeEndpointProbeTimeout)
+	defer cancel()
+	conn, err := dialCRIConnection(probeCtx, path)
+	if err != nil {
+		return fmt.Errorf("dial CRI endpoint: %w", err)
+	}
+	defer conn.Close()
+	if _, err := runtimeapi.NewRuntimeServiceClient(conn).Version(probeCtx, &runtimeapi.VersionRequest{Version: "v1"}); err != nil {
+		return fmt.Errorf("probe CRI endpoint: %w", err)
+	}
+	return nil
+}
+
 func DialContainerdCRI(ctx context.Context, endpoint string) (*CRISandboxResolver, io.Closer, error) {
 	return dialContainerdCRI(ctx, endpoint, criDialTimeout)
 }
@@ -65,12 +89,9 @@ func dialContainerdCRI(ctx context.Context, endpoint string, timeout time.Durati
 	if err != nil {
 		return nil, nil, err
 	}
-	dialer := func(ctx context.Context, _ string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, "unix", path)
-	}
 	dialCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	conn, err := grpc.DialContext(dialCtx, "passthrough:///oncache-cri", grpc.WithContextDialer(dialer), grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock())
+	conn, err := dialCRIConnection(dialCtx, path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("dial CRI endpoint: %w", err)
 	}

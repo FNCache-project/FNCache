@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"strings"
 	"time"
 )
@@ -18,7 +17,7 @@ const (
 )
 
 var (
-	// ErrContainerdEndpointNotReady indicates that auto discovery found no reachable socket yet.
+	// ErrContainerdEndpointNotReady indicates that auto discovery found no usable CRI endpoint yet.
 	ErrContainerdEndpointNotReady = errors.New("containerd endpoint not ready")
 )
 
@@ -29,15 +28,15 @@ var defaultContainerdEndpoints = []string{
 	"unix:///run/containerd/containerd.sock",
 }
 
-type unixSocketDialer func(context.Context, string) (net.Conn, error)
+type unixSocketProbe func(context.Context, string) error
 
-// ResolveContainerdEndpoint returns an explicit endpoint or the first reachable supported socket.
+// ResolveContainerdEndpoint returns an explicit endpoint or the first usable supported CRI socket.
 func ResolveContainerdEndpoint(ctx context.Context, endpoint string) (string, error) {
-	return resolveContainerdEndpoint(ctx, endpoint, defaultContainerdEndpoints, dialUnixSocket)
+	return resolveContainerdEndpoint(ctx, endpoint, defaultContainerdEndpoints, probeContainerdCRI)
 }
 
 // resolveContainerdEndpoint probes candidates with a bounded timeout while preserving cancellation.
-func resolveContainerdEndpoint(ctx context.Context, endpoint string, candidates []string, dial unixSocketDialer) (string, error) {
+func resolveContainerdEndpoint(ctx context.Context, endpoint string, candidates []string, probe unixSocketProbe) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -47,8 +46,8 @@ func resolveContainerdEndpoint(ctx context.Context, endpoint string, candidates 
 		}
 		return endpoint, nil
 	}
-	if dial == nil {
-		return "", fmt.Errorf("containerd endpoint dialer is required")
+	if probe == nil {
+		return "", fmt.Errorf("containerd endpoint probe is required")
 	}
 
 	failures := make([]string, 0, len(candidates))
@@ -62,24 +61,15 @@ func resolveContainerdEndpoint(ctx context.Context, endpoint string, candidates 
 			continue
 		}
 		probeCtx, cancel := context.WithTimeout(ctx, runtimeEndpointProbeTimeout)
-		conn, dialErr := dial(probeCtx, path)
+		probeErr := probe(probeCtx, path)
 		cancel()
-		if dialErr == nil && conn != nil {
-			_ = conn.Close()
+		if probeErr == nil {
 			return candidate, nil
-		}
-		if dialErr == nil {
-			dialErr = errors.New("dialer returned nil connection")
 		}
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		failures = append(failures, fmt.Sprintf("%s: %v", path, dialErr))
+		failures = append(failures, fmt.Sprintf("%s: %v", path, probeErr))
 	}
 	return "", fmt.Errorf("%w: %s", ErrContainerdEndpointNotReady, strings.Join(failures, "; "))
-}
-
-// dialUnixSocket opens a Unix socket for endpoint discovery.
-func dialUnixSocket(ctx context.Context, path string) (net.Conn, error) {
-	return (&net.Dialer{}).DialContext(ctx, "unix", path)
 }
