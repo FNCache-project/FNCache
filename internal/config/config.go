@@ -27,24 +27,25 @@ func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 }
 
 type AgentConfiguration struct {
-	APIVersion      string          `yaml:"apiVersion"`
-	Kind            string          `yaml:"kind"`
-	NodeName        string          `yaml:"nodeName"`
-	RuntimeEndpoint string          `yaml:"runtimeEndpoint"`
-	PinRoot         string          `yaml:"pinRoot"`
-	StateDir        string          `yaml:"stateDir"`
-	Datapath        DatapathConfig  `yaml:"datapath"`
-	Overlay         OverlayConfig   `yaml:"overlay"`
-	Markers         MarkerConfig    `yaml:"markers"`
-	Heartbeat       HeartbeatConfig `yaml:"heartbeat"`
-	Kube            KubeConfig      `yaml:"kube"`
-	Health          HealthConfig    `yaml:"health"`
-	Scan            ScanConfig      `yaml:"scan"`
-	Maps            MapConfig       `yaml:"maps"`
-	Server          ServerConfig    `yaml:"server"`
-	Features        FeatureConfig   `yaml:"features"`
-	LogLevel        string          `yaml:"-"`
-	InstallationID  string          `yaml:"-"`
+	APIVersion      string              `yaml:"apiVersion"`
+	Kind            string              `yaml:"kind"`
+	NodeName        string              `yaml:"nodeName"`
+	RuntimeEndpoint string              `yaml:"runtimeEndpoint"`
+	PinRoot         string              `yaml:"pinRoot"`
+	StateDir        string              `yaml:"stateDir"`
+	Datapath        DatapathConfig      `yaml:"datapath"`
+	Overlay         OverlayConfig       `yaml:"overlay"`
+	Markers         MarkerConfig        `yaml:"markers"`
+	Heartbeat       HeartbeatConfig     `yaml:"heartbeat"`
+	Kube            KubeConfig          `yaml:"kube"`
+	Health          HealthConfig        `yaml:"health"`
+	Scan            ScanConfig          `yaml:"scan"`
+	Maps            MapConfig           `yaml:"maps"`
+	Server          ServerConfig        `yaml:"server"`
+	Features        FeatureConfig       `yaml:"features"`
+	Observability   ObservabilityConfig `yaml:"observability"`
+	LogLevel        string              `yaml:"-"`
+	InstallationID  string              `yaml:"-"`
 }
 
 type OverlayConfig struct {
@@ -100,6 +101,14 @@ type FeatureConfig struct {
 	Enabled           bool `yaml:"enabled"`
 	DebugState        bool `yaml:"debugState"`
 	CleanupOnShutdown bool `yaml:"cleanupOnShutdown"`
+}
+
+type ObservabilityConfig struct {
+	DatapathCounters DatapathCountersConfig `yaml:"datapathCounters"`
+}
+
+type DatapathCountersConfig struct {
+	Enabled bool `yaml:"enabled"`
 }
 
 func Load(path string) (AgentConfiguration, error) {

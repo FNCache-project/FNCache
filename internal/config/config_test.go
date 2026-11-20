@@ -20,6 +20,26 @@ func TestLoadDefaultsAndEnvironment(t *testing.T) {
 	if cfg.NodeName != "node-a" || cfg.LogLevel != "debug" || cfg.InstallationID != "install-a" {
 		t.Fatalf("environment overrides not applied: %+v", cfg)
 	}
+	if cfg.Observability.DatapathCounters.Enabled {
+		t.Fatal("datapath counters were enabled by default")
+	}
+}
+
+func TestLoadPreservesDatapathCountersEnabled(t *testing.T) {
+	t.Setenv("ONCACHE_NODE_NAME", "node-a")
+	path := writeConfig(t, `nodeName: node-a
+observability:
+  datapathCounters:
+    enabled: true
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Observability.DatapathCounters.Enabled {
+		t.Fatal("observability.datapathCounters.enabled=true was not preserved")
+	}
 }
 
 func TestLoadPreservesDisabledFeature(t *testing.T) {

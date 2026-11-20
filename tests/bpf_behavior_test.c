@@ -5,7 +5,6 @@
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/pkt_cls.h>
-#include <netinet/ip.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -16,6 +15,7 @@
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
 
+#include "common_defines.h"
 #include "oncache_abi.h"
 
 #define PACKET_MAX 512
@@ -29,7 +29,7 @@
 
 struct env {
     struct bpf_object *obj;
-    int control, policy, egressip, egress, ingress, devmap;
+    int control, policy, egressip, egress, ingress, devmap, stats;
 };
 
 struct race_arg {
@@ -122,14 +122,39 @@ static int load_env(const char *path, struct env *e) {
     e->egress = MAP_FD("egress_cache");
     e->ingress = MAP_FD("ingress_cache");
     e->devmap = MAP_FD("devmap");
+    e->stats = MAP_FD("stats_map");
 #undef MAP_FD
     return check(e->control >= 0 && e->policy >= 0 && e->egressip >= 0 &&
-                 e->egress >= 0 && e->ingress >= 0 && e->devmap >= 0,
+                 e->egress >= 0 && e->ingress >= 0 && e->devmap >= 0 &&
+                 e->stats >= 0,
                  "required maps loaded");
 }
 
 static void close_env(struct env *e) {
     if (e->obj) bpf_object__close(e->obj);
+}
+
+static int stats_map_layout(struct env *e) {
+    struct bpf_map_info info = {};
+    __u32 info_len = sizeof(info);
+    if (bpf_obj_get_info_by_fd(e->stats, &info, &info_len)) return 1;
+    return check(info.type == BPF_MAP_TYPE_PERCPU_ARRAY && info.key_size == 4 &&
+                 info.value_size == 8 && info.max_entries == 14 && info.map_flags == 0,
+                 "stats_map ABI");
+}
+
+static int stats_value(struct env *e, __u32 key, __u64 *value) {
+    int cpus = libbpf_num_possible_cpus();
+    if (cpus <= 0) return 1;
+    __u64 *values = calloc((size_t)cpus, sizeof(*values));
+    if (!values) return 1;
+    int err = bpf_map_lookup_elem(e->stats, &key, values);
+    if (!err) {
+        *value = 0;
+        for (int cpu = 0; cpu < cpus; cpu++) *value += values[cpu];
+    }
+    free(values);
+    return err;
 }
 
 static int control_with_vxlan(struct env *e, uint32_t enabled, uint32_t flags,
@@ -204,6 +229,65 @@ static int control_tests(const char *path) {
     struct oncache_control_v1 bad = {.abi_version = 2, .enabled = 1};
     if (bpf_map_update_elem(e.control, &key, &bad, BPF_ANY) ||
         all_programs(&e, packet, len, TC_ACT_OK, 1)) return 1;
+    close_env(&e);
+    return 0;
+}
+
+static int stats_tests(const char *path) {
+    struct env e;
+    uint8_t packet[PACKET_MAX], output[PACKET_MAX];
+    size_t len = plain_packet(packet, 0, IPPROTO_UDP, IP_A, IP_B);
+    __u64 before, after;
+    if (load_env(path, &e) || stats_map_layout(&e) ||
+        control(&e, 1, 0, 0, UINT64_MAX) ||
+        stats_value(&e, ONCACHE_STAT_MASQ_EGRESSIP_MISS, &before)) return 1;
+    if (run(program(&e, "tc_masq"), packet, len, IF_IN, output) != TC_ACT_OK ||
+        stats_value(&e, ONCACHE_STAT_MASQ_EGRESSIP_MISS, &after) || after != before) {
+        fprintf(stderr, "FAIL: debug counters changed while disabled\n");
+        close_env(&e);
+        return 1;
+    }
+    if (control(&e, 1, ONCACHE_CONTROL_FLAG_DEBUG_COUNTERS, 0, UINT64_MAX) ||
+        run(program(&e, "tc_masq"), packet, len, IF_IN, output) != TC_ACT_OK ||
+        stats_value(&e, ONCACHE_STAT_MASQ_EGRESSIP_MISS, &after) || after != before + 1) {
+        fprintf(stderr, "FAIL: debug counter did not increment while enabled\n");
+        close_env(&e);
+        return 1;
+    }
+    if (control(&e, 1, 0, 0, UINT64_MAX) ||
+        run(program(&e, "tc_masq"), packet, len, IF_IN, output) != TC_ACT_OK ||
+        stats_value(&e, ONCACHE_STAT_MASQ_EGRESSIP_MISS, &after) || after != before + 1) {
+        fprintf(stderr, "FAIL: debug counter changed after disabling\n");
+        close_env(&e);
+        return 1;
+    }
+    close_env(&e);
+    return 0;
+}
+
+static int stats_performance_tests(const char *path) {
+    enum { ITERATIONS = 10000 };
+    struct env e;
+    uint8_t packet[PACKET_MAX], output[PACKET_MAX];
+    size_t len = plain_packet(packet, 0, IPPROTO_UDP, IP_A, IP_B);
+    if (load_env(path, &e)) return 1;
+    for (int mode = 0; mode < 2; mode++) {
+        uint32_t flags = mode ? ONCACHE_CONTROL_FLAG_DEBUG_COUNTERS : 0;
+        if (control(&e, 1, flags, 0, UINT64_MAX)) {
+            close_env(&e);
+            return 1;
+        }
+        uint64_t start = now_ns();
+        for (int i = 0; i < ITERATIONS; i++) {
+            if (run(program(&e, "tc_masq"), packet, len, IF_IN, output) != TC_ACT_OK) {
+                close_env(&e);
+                return 1;
+            }
+        }
+        uint64_t elapsed = now_ns() - start;
+        printf("stats-performance debug=%d iterations=%d ns_per_run=%llu\n",
+               mode, ITERATIONS, (unsigned long long)(elapsed / ITERATIONS));
+    }
     close_env(&e);
     return 0;
 }
@@ -541,6 +625,10 @@ int main(int argc, char **argv) {
     }
     puts("control");
     if (control_tests(argv[1])) return 1;
+    puts("stats");
+    if (stats_tests(argv[1])) return 1;
+    puts("stats-performance");
+    if (stats_performance_tests(argv[1])) return 1;
     puts("malformed");
     if (malformed_tests(argv[1])) return 1;
     puts("learn-hit");

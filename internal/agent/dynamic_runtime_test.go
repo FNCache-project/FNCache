@@ -322,6 +322,17 @@ func dynamicTestConfig() config.AgentConfiguration {
 	}
 }
 
+func TestDatapathControlFlagsFollowDatapathCounterConfig(t *testing.T) {
+	cfg := dynamicTestConfig()
+	if got := datapathControlFlags(cfg); got != 0 {
+		t.Fatalf("disabled datapath counters flags = %#x, want 0", got)
+	}
+	cfg.Observability.DatapathCounters.Enabled = true
+	if got := datapathControlFlags(cfg); got != datapath.ControlFlagDebugCounters {
+		t.Fatalf("enabled datapath counters flags = %#x, want %#x", got, datapath.ControlFlagDebugCounters)
+	}
+}
+
 // TestDynamicRuntimeStartsKubernetesControlChain verifies startup and graceful shutdown.
 func TestDynamicRuntimeStartsKubernetesControlChain(t *testing.T) {
 	sources := controlplane.Sources{Preflight: dynamicObserverPreflight{}, Flannel: dynamicObserverFlannel{}, Endpoints: dynamicObserverEndpoints{}, Pins: dynamicRuntimePins{}, TC: dynamicRuntimeTC{}, Rules: dynamicObserverRules{}}

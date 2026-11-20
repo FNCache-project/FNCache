@@ -390,7 +390,7 @@ func V1SchemaWithCapacities(capacities MapCapacities) CollectionSchema {
 			{Name: "devmap", Type: ebpf.LRUHash, KeySize: 4, ValueSize: 12, MaxEntries: capacities.DevMapMaxEntries},
 			{Name: "control_map", Type: ebpf.Array, KeySize: 4, ValueSize: 40, MaxEntries: 1},
 			{Name: "policy_lock_map", Type: ebpf.Array, KeySize: 4, ValueSize: 4, MaxEntries: 1},
-			{Name: "stats_map", Type: ebpf.PerCPUArray, KeySize: 4, ValueSize: 8, MaxEntries: 14},
+			StatsMapSchema(),
 		},
 	}
 }

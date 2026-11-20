@@ -24,29 +24,31 @@ import (
 	"github.com/cat-cc-Lcos/FNCache/internal/kubernetes/queue"
 	"github.com/cat-cc-Lcos/FNCache/internal/observability"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 type DynamicRuntime struct {
-	config        config.AgentConfiguration
-	snapshots     *observability.SnapshotStore
-	store         *kubernetes.SnapshotStore
-	source        *kubernetes.InformerSource
-	bootstrap     *KubeBootstrap
-	resync        *kubernetes.ResyncScheduler
-	queue         *queue.Queue
-	barrier       *reconcile.CoordinationBarrier
-	lifecycle     *reconcile.AgentStateMachine
-	healthEpoch   *HealthEpoch
-	factory       datapathComponentFactory
-	logger        observability.EventLogger
-	components    *datapathComponents
-	observer      *DynamicObserver
-	worker        *queue.Worker
-	heartbeat     *HeartbeatRefresher
-	apiHealth     *APIHealthMonitor
-	flannelHealth *FlannelHealthMonitor
-	markerHealth  *MarkerHealthMonitor
-	scanScheduler *ScanScheduler
+	config         config.AgentConfiguration
+	snapshots      *observability.SnapshotStore
+	store          *kubernetes.SnapshotStore
+	source         *kubernetes.InformerSource
+	bootstrap      *KubeBootstrap
+	resync         *kubernetes.ResyncScheduler
+	queue          *queue.Queue
+	barrier        *reconcile.CoordinationBarrier
+	lifecycle      *reconcile.AgentStateMachine
+	healthEpoch    *HealthEpoch
+	factory        datapathComponentFactory
+	logger         observability.EventLogger
+	components     *datapathComponents
+	observer       *DynamicObserver
+	worker         *queue.Worker
+	heartbeat      *HeartbeatRefresher
+	apiHealth      *APIHealthMonitor
+	flannelHealth  *FlannelHealthMonitor
+	markerHealth   *MarkerHealthMonitor
+	scanScheduler  *ScanScheduler
+	statsCollector *datapath.StatsCollector
 
 	statusMu           sync.RWMutex
 	statusPublishMu    sync.Mutex
@@ -107,6 +109,14 @@ func newDynamicRuntimeWithFactoryAndLogger(cfg config.AgentConfiguration, client
 	if logger == nil {
 		logger = observability.NewDefault("queue")
 	}
+	var statsCollector *datapath.StatsCollector
+	if cfg.Observability.DatapathCounters.Enabled {
+		collector, err := datapath.NewStatsCollector(cfg.PinRoot)
+		if err != nil {
+			return nil, fmt.Errorf("create datapath stats collector: %w", err)
+		}
+		statsCollector = collector
+	}
 	store := kubernetes.NewSnapshotStore()
 	interval := time.Duration(cfg.Kube.ResyncInterval)
 	source, err := kubernetes.NewInformerSource(client, store, interval)
@@ -145,7 +155,7 @@ func newDynamicRuntimeWithFactoryAndLogger(cfg config.AgentConfiguration, client
 			observability.HeartbeatFresh: false,
 		},
 	})
-	return &DynamicRuntime{config: cfg, snapshots: snapshots, store: store, source: source, bootstrap: bootstrap, resync: resync, queue: target, barrier: reconcile.NewCoordinationBarrier(), lifecycle: reconcile.NewAgentStateMachine(), healthEpoch: NewHealthEpoch(), factory: factory, logger: logger, apiHealth: apiHealth}, nil
+	return &DynamicRuntime{config: cfg, snapshots: snapshots, store: store, source: source, bootstrap: bootstrap, resync: resync, queue: target, barrier: reconcile.NewCoordinationBarrier(), lifecycle: reconcile.NewAgentStateMachine(), healthEpoch: NewHealthEpoch(), factory: factory, logger: logger, apiHealth: apiHealth, statsCollector: statsCollector}, nil
 }
 
 // Run starts the dynamic runtime and blocks until it stops or fails.
@@ -220,6 +230,15 @@ func (r *DynamicRuntime) Run(ctx context.Context) error {
 	r.Status(ctx)
 	r.healthEpoch.Advance()
 	r.Status(ctx)
+	statsDone := make(chan struct{})
+	if r.statsCollector == nil {
+		close(statsDone)
+	} else {
+		go func() {
+			r.statsCollector.Run(runCtx)
+			close(statsDone)
+		}()
+	}
 	heartbeatDone := make(chan error, 1)
 	go func() { heartbeatDone <- r.heartbeat.Run(runCtx) }()
 	statusDone := make(chan struct{})
@@ -232,6 +251,7 @@ func (r *DynamicRuntime) Run(ctx context.Context) error {
 	stopResult := r.waitForRuntimeStop(ctx, ctx.Done(), heartbeatDone, scanResults)
 	cancel()
 	<-statusDone
+	<-statsDone
 	r.queue.ShutDown()
 	heartbeatObserved := stopResult.heartbeatObserved
 	failureErr := stopResult.failureErr
@@ -502,8 +522,22 @@ func (r *DynamicRuntime) State() KubeBootstrapState { return r.bootstrap.State()
 
 func (r *DynamicRuntime) AgentState() reconcile.AgentState { return r.lifecycle.State() }
 
+func (r *DynamicRuntime) ObservabilityCollectors() []prometheus.Collector {
+	if r == nil || r.statsCollector == nil {
+		return nil
+	}
+	return []prometheus.Collector{r.statsCollector}
+}
+
 func (r *DynamicRuntime) flannelDiscoveryRequest() flannel.DiscoveryRequest {
 	return flannel.DiscoveryRequest{VXLANLinkName: r.config.Overlay.VXLANLinkName, UnderlayDevice: r.config.Overlay.Device, MissMask: r.config.Markers.MissMask, EstablishedMask: r.config.Markers.EstablishedMask, IPTablesBackend: "iptables-nft"}
+}
+
+func datapathControlFlags(cfg config.AgentConfiguration) uint32 {
+	if cfg.Observability.DatapathCounters.Enabled {
+		return datapath.ControlFlagDebugCounters
+	}
+	return 0
 }
 
 func (r *DynamicRuntime) markerRuleSpec() flannel.MarkerRuleSpec {
@@ -535,7 +569,7 @@ func (r *DynamicRuntime) initializeDatapath(ctx context.Context) error {
 	components, err := r.factory(ctx, datapathComponentConfig{
 		ELFPath: r.config.Datapath.ELFPath, PinRoot: r.config.PinRoot, StatePath: filepath.Join(r.config.StateDir, "state.json"),
 		InstallationID: r.config.InstallationID, ELFBuildID: r.config.Datapath.ELFBuildID, HeartbeatNS: heartbeat,
-		HeartbeatTimeoutNS: uint64(time.Duration(r.config.Heartbeat.Timeout)), Flags: 0,
+		HeartbeatTimeoutNS: uint64(time.Duration(r.config.Heartbeat.Timeout)), Flags: datapathControlFlags(r.config),
 		MapCapacities: datapath.MapCapacities{
 			IngressCacheMaxEntries: r.config.Maps.IngressCacheMaxEntries, EgressIPCacheMaxEntries: r.config.Maps.EgressIPCacheMaxEntries,
 			EgressCacheMaxEntries: r.config.Maps.EgressCacheMaxEntries, PolicyCacheMaxEntries: r.config.Maps.PolicyCacheMaxEntries,

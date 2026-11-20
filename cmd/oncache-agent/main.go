@@ -83,7 +83,7 @@ func runDynamic(path string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	handler, err := observability.NewHandler(observability.HandlerConfig{DebugState: runtime.DebugStateEnabled()}, runtime.SnapshotStore())
+	handler, err := observability.NewHandler(observability.HandlerConfig{DebugState: runtime.DebugStateEnabled(), Collectors: runtime.ObservabilityCollectors()}, runtime.SnapshotStore())
 	if err != nil {
 		return fmt.Errorf("create observability handler: %w", err)
 	}
