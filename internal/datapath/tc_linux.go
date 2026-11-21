@@ -39,6 +39,7 @@ type tcNetlinkAPI interface {
 type tcProgram interface {
 	FD() int
 	ProgramID() (uint32, error)
+	Unpin() error
 	Close() error
 }
 type tcProgramLoader interface {
@@ -205,6 +206,17 @@ func (b *linuxTCBackend) MigrateLegacyFilter(ctx context.Context, current TCFilt
 			return TCFilterState{}, true, safetyError(fmt.Sprintf("legacy BPF filter migration failed and rollback failed: migrate=%v rollback=%v", err, restoreErr))
 		}
 		return TCFilterState{}, true, fmt.Errorf("attach migrated BPF filter %s: %w", spec.Program, err)
+	}
+	if err := legacy.Unpin(); err != nil {
+		if rollbackErr := b.api.deleteFilter(ctx, spec.Link, newFilter); rollbackErr != nil {
+			return TCFilterState{}, true, safetyError(fmt.Sprintf("legacy BPF pin removal failed and rollback delete failed: remove=%v rollback=%v", err, rollbackErr))
+		}
+		restore := oldFilter
+		restore.FD = legacy.FD()
+		if restoreErr := b.api.addFilter(ctx, spec.Link, restore); restoreErr != nil {
+			return TCFilterState{}, true, safetyError(fmt.Sprintf("legacy BPF pin removal failed and rollback restore failed: remove=%v rollback=%v", err, restoreErr))
+		}
+		return TCFilterState{}, true, fmt.Errorf("remove legacy BPF program pin %s: %w", legacyName, err)
 	}
 	return TCFilterState{Link: spec.Link, Hook: spec.Hook, Program: spec.Program, ProgramID: spec.ProgramID, Priority: spec.Priority, Handle: spec.Handle, DirectAction: spec.DirectAction}, true, nil
 }
@@ -427,5 +439,7 @@ func (p *ebpfTCProgram) ProgramID() (uint32, error) {
 	}
 	return uint32(id), nil
 }
+
+func (p *ebpfTCProgram) Unpin() error { return p.program.Unpin() }
 
 func (p *ebpfTCProgram) Close() error { return p.program.Close() }
