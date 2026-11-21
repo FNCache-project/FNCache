@@ -27,6 +27,8 @@ func NewTCScanner(manager *TCManager) (*TCScanner, error) {
 
 func (s *TCScanner) Scan(ctx context.Context, links []endpoint.LinkIdentity) (reconcile.ActualState, error) {
 	actual := reconcile.ActualState{ScannedAt: s.now()}
+	scanned := make([]TCFilterState, 0)
+	complete := len(links) != 0
 	seen := make(map[struct {
 		ns    uint64
 		index int
@@ -46,11 +48,13 @@ func (s *TCScanner) Scan(ctx context.Context, links []endpoint.LinkIdentity) (re
 		filters, err := s.manager.ListFilters(ctx, link)
 		if err != nil {
 			if isMissingTCLinkError(err) {
+				complete = false
 				continue
 			}
 			return reconcile.ActualState{}, fmt.Errorf("scan TC filters on ifindex %d: %w", link.IfIndex, err)
 		}
 		for _, filter := range filters {
+			scanned = append(scanned, filter)
 			actual.Attachments = append(actual.Attachments, reconcile.AttachmentState{
 				Link: filter.Link, Hook: string(filter.Hook), Program: filter.Program,
 				Priority: filter.Priority, Handle: filter.Handle, ProgramID: filter.ProgramID, DirectAction: filter.DirectAction,
@@ -64,6 +68,11 @@ func (s *TCScanner) Scan(ctx context.Context, links []endpoint.LinkIdentity) (re
 					Kind: "tc-filter", Identity: tcFilterIdentity(filter), Detail: "TC BPF filter is not direct-action",
 				})
 			}
+		}
+	}
+	if complete {
+		if err := s.manager.finalizeLegacyMigrations(ctx, scanned); err != nil {
+			return reconcile.ActualState{}, fmt.Errorf("finalize legacy TC migrations: %w", err)
 		}
 	}
 	return actual, nil

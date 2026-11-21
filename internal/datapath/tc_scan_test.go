@@ -14,6 +14,16 @@ type scanTCBackend struct {
 	err     error
 }
 
+type finalizingScanTCBackend struct {
+	scanTCBackend
+	finalized []TCFilterState
+}
+
+func (b *finalizingScanTCBackend) finalizeLegacyMigrations(_ context.Context, filters []TCFilterState) error {
+	b.finalized = append([]TCFilterState(nil), filters...)
+	return nil
+}
+
 func (b *scanTCBackend) EnsureClsact(context.Context, endpoint.LinkIdentity) (TCQdiscState, error) {
 	return TCQdiscState{}, nil
 }
@@ -110,5 +120,26 @@ func TestTCScannerTreatsMissingNetNSAsMissing(t *testing.T) {
 	actual, err := scanner.Scan(context.Background(), []endpoint.LinkIdentity{link})
 	if err != nil || len(actual.Attachments) != 0 || len(actual.Conflicts) != 0 {
 		t.Fatalf("missing netns was not treated as missing: actual=%+v err=%v", actual, err)
+	}
+}
+
+func TestTCScannerFinalizesLegacyMigrationsAfterCompleteScan(t *testing.T) {
+	link := endpoint.LinkIdentity{IfIndex: 7, NetNSInode: 42}
+	backend := &finalizingScanTCBackend{scanTCBackend: scanTCBackend{filters: map[int][]TCFilterState{7: {
+		{Link: link, Hook: HookEgress, Program: "tc_init_e", ProgramID: 10, Priority: FixedTCPriority, Handle: 0x100, DirectAction: true},
+	}}}}
+	manager, err := NewTCManager(backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanner, err := NewTCScanner(manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(context.Background(), []endpoint.LinkIdentity{link}); err != nil {
+		t.Fatal(err)
+	}
+	if len(backend.finalized) != 1 || backend.finalized[0].Program != "tc_init_e" {
+		t.Fatalf("legacy migrations were not finalized after complete scan: %+v", backend.finalized)
 	}
 }
