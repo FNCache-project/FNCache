@@ -26,6 +26,7 @@
 #define IP_NODE ((uint32_t)htonl(0xc0a80102U))
 #define VXLAN_TEST_PORT 8472U
 #define VXLAN_TEST_VNI 1U
+#define VXLAN_UDP_CSUM_OFF (ETH_HLEN + sizeof(struct iphdr) + offsetof(struct udphdr, check))
 
 struct env {
     struct bpf_object *obj;
@@ -362,6 +363,30 @@ static int seed_hit(struct env *e, uint32_t current, uint16_t udp_port, uint32_t
            bpf_map_update_elem(e->devmap, &current, &device, BPF_ANY);
 }
 
+static int set_cached_outer_udp_checksum(struct env *e, uint16_t checksum) {
+    struct oncache_egress_v1 egress = {};
+    uint32_t node = IP_NODE;
+    if (bpf_map_lookup_elem(e->egress, &node, &egress)) return 1;
+    put16(egress.outer_header + VXLAN_UDP_CSUM_OFF, htons(checksum));
+    return bpf_map_update_elem(e->egress, &node, &egress, BPF_ANY);
+}
+
+static int nonzero_checksum_fallback_tests(const char *path) {
+    struct env e;
+    uint8_t packet[PACKET_MAX], output[PACKET_MAX];
+    size_t len = plain_packet(packet, 0, IPPROTO_UDP, IP_A, IP_B);
+    if (load_env(path, &e) || control(&e, 1, 0, 0, UINT64_MAX) ||
+        seed_hit(&e, IF_IN, VXLAN_TEST_PORT, VXLAN_TEST_VNI) ||
+        set_cached_outer_udp_checksum(&e, 1)) return 1;
+    int ret = run(program(&e, "tc_masq"), packet, len, IF_IN, output);
+    int failed = check(ret == TC_ACT_OK,
+                       "non-zero outer UDP checksum falls back") ||
+                 check(!memcmp(packet, output, len),
+                       "non-zero checksum fallback preserves packet");
+    close_env(&e);
+    return failed;
+}
+
 static int learn_hit_tests(const char *path) {
     struct env e;
     uint8_t packet[PACKET_MAX], output[PACKET_MAX];
@@ -633,6 +658,8 @@ int main(int argc, char **argv) {
     if (malformed_tests(argv[1])) return 1;
     puts("learn-hit");
     if (learn_hit_tests(argv[1])) return 1;
+    puts("non-zero-vxlan-checksum");
+    if (nonzero_checksum_fallback_tests(argv[1])) return 1;
     puts("leading-zero-mac");
     if (leading_zero_mac_tests(argv[1])) return 1;
     puts("vxlan-validation");

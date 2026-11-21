@@ -159,6 +159,15 @@ int tc_masq(struct __sk_buff *ctx) {
         goto out;
     }
 
+    // The cached outer checksum covers the original encapsulated payload.
+    // The fast path reuses only the outer header, so non-zero checksums are
+    // not safe to preserve after replacing the packet contents.
+    __be16 cached_udp_check;
+    __builtin_memcpy(&cached_udp_check,
+                     egressinfo_->outer_header + UDP_CSUM_OFF,
+                     sizeof(cached_udp_check));
+    if (cached_udp_check != 0) goto out;
+
     // Check for restore cache
     struct oncache_ingress_v1* ingressinfo_ = bpf_map_lookup_elem(&ingress_cache, &iphdr->saddr);
     if (!ingressinfo_ || oncache_mac_is_zero(ingressinfo_->src_mac)) {
