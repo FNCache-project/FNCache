@@ -50,6 +50,7 @@ type linuxTCBackend struct {
 	pinRoot       string
 	api           tcNetlinkAPI
 	loader        tcProgramLoader
+	filterMu      sync.Mutex
 	pendingMu     sync.Mutex
 	pendingLegacy map[string][]pendingLegacyMigration
 }
@@ -101,6 +102,12 @@ func (b *linuxTCBackend) EnsureClsact(ctx context.Context, link endpoint.LinkIde
 	return TCQdiscState{Link: link, Exists: true, CreatedByOncache: true}, nil
 }
 func (b *linuxTCBackend) ListFilters(ctx context.Context, link endpoint.LinkIdentity) ([]TCFilterState, error) {
+	b.filterMu.Lock()
+	defer b.filterMu.Unlock()
+	return b.listFilters(ctx, link)
+}
+
+func (b *linuxTCBackend) listFilters(ctx context.Context, link endpoint.LinkIdentity) ([]TCFilterState, error) {
 	if err := validateLink(link); err != nil {
 		return nil, err
 	}
@@ -130,6 +137,8 @@ func (b *linuxTCBackend) ListFilters(ctx context.Context, link endpoint.LinkIden
 }
 
 func (b *linuxTCBackend) AttachFilter(ctx context.Context, spec TCFilterSpec) (TCFilterState, error) {
+	b.filterMu.Lock()
+	defer b.filterMu.Unlock()
 	if err := validateFilterSpec(spec); err != nil {
 		return TCFilterState{}, err
 	}
@@ -160,6 +169,8 @@ func (b *linuxTCBackend) AttachFilter(ctx context.Context, spec TCFilterSpec) (T
 }
 
 func (b *linuxTCBackend) MigrateLegacyFilter(ctx context.Context, current TCFilterState, spec TCFilterSpec) (TCFilterState, bool, error) {
+	b.filterMu.Lock()
+	defer b.filterMu.Unlock()
 	legacyName, ok := legacyProgramNames[spec.Program]
 	if !ok || !sameLink(current.Link, spec.Link) || current.Hook != spec.Hook ||
 		current.Priority != spec.Priority || current.Handle != spec.Handle {
@@ -243,6 +254,8 @@ func (b *linuxTCBackend) finalizeLegacyMigrations(ctx context.Context, filters [
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	b.filterMu.Lock()
+	defer b.filterMu.Unlock()
 	pending := b.snapshotLegacyMigrations()
 	rediscovered, err := b.rediscoverLegacyMigrations(ctx, filters)
 	if err != nil {
@@ -382,7 +395,7 @@ func (b *linuxTCBackend) removeLegacyPin(ctx context.Context, path string, migra
 
 func (b *linuxTCBackend) rollbackLegacyMigrations(ctx context.Context, migrations []pendingLegacyMigration, legacyFD int) error {
 	for _, migration := range migrations {
-		if err := b.api.deleteFilter(ctx, migration.link, migration.newFilter); err != nil {
+		if err := b.deleteMigratedFilterIfOwned(ctx, migration); err != nil {
 			return err
 		}
 		restore := migration.oldFilter
@@ -394,14 +407,35 @@ func (b *linuxTCBackend) rollbackLegacyMigrations(ctx context.Context, migration
 	return nil
 }
 
+func (b *linuxTCBackend) deleteMigratedFilterIfOwned(ctx context.Context, migration pendingLegacyMigration) error {
+	filters, err := b.api.listFilters(ctx, migration.link, migration.newFilter.Parent)
+	if err != nil {
+		return fmt.Errorf("recheck migrated BPF filter before rollback: %w", err)
+	}
+	for _, filter := range filters {
+		if filter.LinkIndex != migration.newFilter.LinkIndex || filter.Parent != migration.newFilter.Parent ||
+			filter.Priority != migration.newFilter.Priority || filter.Handle != migration.newFilter.Handle {
+			continue
+		}
+		if filter.Kind != migration.newFilter.Kind || filter.Program != migration.newFilter.Program ||
+			filter.ProgramID != migration.newFilter.ProgramID || filter.DirectAction != migration.newFilter.DirectAction {
+			return safetyError("refusing to delete a replacement TC filter during legacy migration rollback")
+		}
+		return b.api.deleteFilter(ctx, migration.link, migration.newFilter)
+	}
+	return safetyError("migrated TC filter disappeared before legacy migration rollback")
+}
+
 func (b *linuxTCBackend) RemoveFilter(ctx context.Context, spec TCFilterSpec) error {
+	b.filterMu.Lock()
+	defer b.filterMu.Unlock()
 	if err := validateFilterSpec(spec); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	filters, err := b.ListFilters(ctx, spec.Link)
+	filters, err := b.listFilters(ctx, spec.Link)
 	if err != nil {
 		return fmt.Errorf("recheck TC filters before deletion: %w", err)
 	}

@@ -136,11 +136,32 @@ func TestTCScannerFinalizesLegacyMigrationsAfterCompleteScan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := scanner.Scan(context.Background(), []endpoint.LinkIdentity{link}); err != nil {
+	if _, err := scanner.ScanWithCompleteness(context.Background(), []endpoint.LinkIdentity{link}, true); err != nil {
 		t.Fatal(err)
 	}
 	if len(backend.finalized) != 1 || backend.finalized[0].Program != "tc_init_e" {
 		t.Fatalf("legacy migrations were not finalized after complete scan: %+v", backend.finalized)
+	}
+}
+
+func TestTCScannerDoesNotFinalizeWithoutExplicitCompleteness(t *testing.T) {
+	link := endpoint.LinkIdentity{IfIndex: 7, NetNSInode: 42}
+	backend := &finalizingScanTCBackend{scanTCBackend: scanTCBackend{filters: map[int][]TCFilterState{7: {
+		{Link: link, Hook: HookEgress, Program: "tc_init_e", ProgramID: 10, Priority: FixedTCPriority, Handle: 0x100, DirectAction: true},
+	}}}}
+	manager, err := NewTCManager(backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanner, err := NewTCScanner(manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(context.Background(), []endpoint.LinkIdentity{link}); err != nil {
+		t.Fatal(err)
+	}
+	if len(backend.finalized) != 0 {
+		t.Fatalf("legacy migrations were finalized by the default partial scan: %+v", backend.finalized)
 	}
 }
 
@@ -162,5 +183,26 @@ func TestTCScannerDefersLegacyFinalizationForIncompleteEndpointScan(t *testing.T
 	}
 	if len(backend.finalized) != 0 {
 		t.Fatalf("legacy migrations were finalized during an incomplete endpoint scan: %+v", backend.finalized)
+	}
+}
+
+func TestTCScannerDefersLegacyFinalizationForUnverifiableFilter(t *testing.T) {
+	link := endpoint.LinkIdentity{IfIndex: 7, NetNSInode: 42}
+	backend := &finalizingScanTCBackend{scanTCBackend: scanTCBackend{filters: map[int][]TCFilterState{7: {
+		{Link: link, Hook: HookEgress, Priority: FixedTCPriority, Handle: 0x100, DirectAction: true},
+	}}}}
+	manager, err := NewTCManager(backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanner, err := NewTCScanner(manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.ScanWithCompleteness(context.Background(), []endpoint.LinkIdentity{link}, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(backend.finalized) != 0 {
+		t.Fatalf("legacy migrations were finalized with an unverifiable filter: %+v", backend.finalized)
 	}
 }

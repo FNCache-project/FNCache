@@ -26,7 +26,7 @@ func NewTCScanner(manager *TCManager) (*TCScanner, error) {
 }
 
 func (s *TCScanner) Scan(ctx context.Context, links []endpoint.LinkIdentity) (reconcile.ActualState, error) {
-	return s.scan(ctx, links, true)
+	return s.scan(ctx, links, false)
 }
 
 func (s *TCScanner) ScanWithCompleteness(ctx context.Context, links []endpoint.LinkIdentity, endpointScanComplete bool) (reconcile.ActualState, error) {
@@ -68,6 +68,7 @@ func (s *TCScanner) scan(ctx context.Context, links []endpoint.LinkIdentity, end
 				Priority: filter.Priority, Handle: filter.Handle, ProgramID: filter.ProgramID, DirectAction: filter.DirectAction,
 			})
 			if filter.Program == "" || filter.ProgramID == 0 {
+				complete = false
 				actual.Conflicts = append(actual.Conflicts, discovery.Conflict{
 					Kind: "tc-filter", Identity: tcFilterIdentity(filter), Detail: "filter program identity is not verifiable",
 				})

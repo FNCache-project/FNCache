@@ -281,6 +281,48 @@ func TestLinuxTCBackendRestoresLegacyFilterWhenLegacyPinRemovalFails(t *testing.
 	}
 }
 
+func TestLinuxTCBackendDoesNotDeleteReplacementDuringRollback(t *testing.T) {
+	root := t.TempDir()
+	legacyPath := filepath.Join(root, "programs", "tc_init_e_func")
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	legacy := &fakeTCProgram{fd: 11, id: 99, pinPath: legacyPath, unpinErr: errors.New("unpin failed")}
+	current := &fakeTCProgram{fd: 17, id: 10}
+	loader := &fakeTCProgramLoader{programs: map[string]tcProgram{
+		legacyPath: legacy,
+		filepath.Join(root, "programs", "tc_init_e"): current,
+	}}
+	link := linuxTestLink()
+	api := &fakeTCNetlinkAPI{filters: []kernelFilter{{
+		LinkIndex: link.IfIndex, Parent: 0xfffffff3, Priority: FixedTCPriority, Handle: 0x100,
+		Kind: "bpf", Program: "tc_init_e_func", ProgramID: 99, DirectAction: true,
+	}}}
+	backend, err := newLinuxTCBackend(root, api, loader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, err := NewFixedFilter(link, "tc_init_e", 10, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := backend.(*linuxTCBackend).MigrateLegacyFilter(context.Background(), apiFilterState(link, "tc_init_e_func", 99), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api.filters[0].Program = "replacement"
+	api.filters[0].ProgramID = 77
+	if err := backend.(*linuxTCBackend).finalizeLegacyMigrations(context.Background(), []TCFilterState{got}); err == nil {
+		t.Fatal("rollback accepted a replacement filter at the same TC slot")
+	}
+	if api.filterDeletes != 1 || api.filters[0].Program != "replacement" || api.filters[0].ProgramID != 77 {
+		t.Fatalf("replacement filter was modified during rollback: deletes=%d filters=%+v", api.filterDeletes, api.filters)
+	}
+}
+
 func TestLinuxTCBackendDefersSharedLegacyPinRemoval(t *testing.T) {
 	root := t.TempDir()
 	legacyPath := filepath.Join(root, "programs", "tc_init_e_func")
