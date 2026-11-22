@@ -26,9 +26,17 @@ func NewTCScanner(manager *TCManager) (*TCScanner, error) {
 }
 
 func (s *TCScanner) Scan(ctx context.Context, links []endpoint.LinkIdentity) (reconcile.ActualState, error) {
+	return s.scan(ctx, links, true)
+}
+
+func (s *TCScanner) ScanWithCompleteness(ctx context.Context, links []endpoint.LinkIdentity, endpointScanComplete bool) (reconcile.ActualState, error) {
+	return s.scan(ctx, links, endpointScanComplete)
+}
+
+func (s *TCScanner) scan(ctx context.Context, links []endpoint.LinkIdentity, endpointScanComplete bool) (reconcile.ActualState, error) {
 	actual := reconcile.ActualState{ScannedAt: s.now()}
 	scanned := make([]TCFilterState, 0)
-	complete := len(links) != 0
+	complete := endpointScanComplete && len(links) != 0
 	seen := make(map[struct {
 		ns    uint64
 		index int

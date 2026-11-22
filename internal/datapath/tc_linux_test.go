@@ -329,6 +329,37 @@ func TestLinuxTCBackendDefersSharedLegacyPinRemoval(t *testing.T) {
 	}
 }
 
+func TestLinuxTCBackendRediscoversLegacyPinAfterRestart(t *testing.T) {
+	root := t.TempDir()
+	legacyPath := filepath.Join(root, "programs", "tc_init_e_func")
+	currentPath := filepath.Join(root, "programs", "tc_init_e")
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{legacyPath, currentPath} {
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	legacy := &fakeTCProgram{fd: 11, id: 99, pinPath: legacyPath}
+	current := &fakeTCProgram{fd: 17, id: 10}
+	loader := &fakeTCProgramLoader{programs: map[string]tcProgram{legacyPath: legacy, currentPath: current}}
+	backend, err := newLinuxTCBackend(root, &fakeTCNetlinkAPI{}, loader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentFilter := apiFilterState(linuxTestLink(), "tc_init_e", 10)
+	if err := backend.(*linuxTCBackend).finalizeLegacyMigrations(context.Background(), []TCFilterState{currentFilter}); err != nil {
+		t.Fatal(err)
+	}
+	if !legacy.unpinned {
+		t.Fatal("stale legacy pin was not rediscovered and removed")
+	}
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Fatalf("stale legacy pin remains after restart recovery: err=%v", err)
+	}
+}
+
 func apiFilterState(link endpoint.LinkIdentity, program string, id uint32) TCFilterState {
 	return TCFilterState{Link: link, Hook: HookEgress, Program: program, ProgramID: id, Priority: FixedTCPriority, Handle: 0x100, DirectAction: true}
 }

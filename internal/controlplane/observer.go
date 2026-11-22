@@ -33,6 +33,10 @@ type TCSource interface {
 	Scan(context.Context, []endpoint.LinkIdentity) (reconcile.ActualState, error)
 }
 
+type completeTCSource interface {
+	ScanWithCompleteness(context.Context, []endpoint.LinkIdentity, bool) (reconcile.ActualState, error)
+}
+
 type RuleSource interface {
 	Scan(context.Context, flannel.MarkerRuleSpec) (reconcile.RuleState, error)
 }
@@ -193,7 +197,12 @@ func (o *Observer) Scan(ctx context.Context) (reconcile.ActualState, error) {
 	if err != nil {
 		return reconcile.ActualState{}, fmt.Errorf("scan BPF pins: %w", err)
 	}
-	tc, err := o.sources.TC.Scan(ctx, o.input.TCLinks)
+	var tc reconcile.ActualState
+	if source, ok := o.sources.TC.(completeTCSource); ok {
+		tc, err = source.ScanWithCompleteness(ctx, o.input.TCLinks, len(endpointScanReasons(o.input.EndpointScanSkipped)) == 0)
+	} else {
+		tc, err = o.sources.TC.Scan(ctx, o.input.TCLinks)
+	}
 	if err != nil {
 		return reconcile.ActualState{}, fmt.Errorf("scan TC: %w", err)
 	}

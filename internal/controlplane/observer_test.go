@@ -56,13 +56,20 @@ type fakePins struct {
 func (f *fakePins) Scan(context.Context) (reconcile.ActualState, error) { return f.actual, f.err }
 
 type fakeTC struct {
-	actual reconcile.ActualState
-	err    error
-	links  []endpoint.LinkIdentity
+	actual   reconcile.ActualState
+	err      error
+	links    []endpoint.LinkIdentity
+	complete []bool
 }
 
 func (f *fakeTC) Scan(_ context.Context, links []endpoint.LinkIdentity) (reconcile.ActualState, error) {
 	f.links = links
+	return f.actual, f.err
+}
+
+func (f *fakeTC) ScanWithCompleteness(_ context.Context, links []endpoint.LinkIdentity, complete bool) (reconcile.ActualState, error) {
+	f.links = links
+	f.complete = append(f.complete, complete)
 	return f.actual, f.err
 }
 
@@ -170,6 +177,24 @@ func TestObserverScanPropagatesEndpointScanSkipped(t *testing.T) {
 	}
 	if _, ok := actual.EndpointScanSkipped["pod-unsupported"]; ok {
 		t.Fatalf("unsupported endpoint incorrectly marked incomplete: %#v", actual.EndpointScanSkipped)
+	}
+}
+
+func TestObserverScanPassesEndpointScanCompletenessToTC(t *testing.T) {
+	tc := &fakeTC{}
+	sources := testSources(&fakePreflight{report: discovery.CapabilityReport{Supported: true}}, &fakeFlannel{config: testFlannelConfig()}, &fakeEndpoints{})
+	sources.TC = tc
+	input := testInput()
+	input.EndpointScanSkipped = map[string]error{"pod-a": endpoint.ErrEndpointNotReady}
+	observer, err := NewObserver(sources, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := observer.Scan(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(tc.complete) != 1 || tc.complete[0] {
+		t.Fatalf("incomplete endpoint scan was not passed to TC scanner: %v", tc.complete)
 	}
 }
 
