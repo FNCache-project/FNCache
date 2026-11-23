@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
@@ -27,6 +28,37 @@ func TestLinuxProbeReportsBasicCapabilities(t *testing.T) {
 		if !check.Supported {
 			t.Fatalf("basic check failed: %+v", check)
 		}
+	}
+}
+
+func TestLinuxProbeReportsMissingDatapathHelpers(t *testing.T) {
+	for _, missing := range []string{"bpf_redirect", "bpf_skb_load_bytes"} {
+		t.Run(missing, func(t *testing.T) {
+			runner := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+				output, err := fakeCommandRunner(ctx, name, args...)
+				if err != nil || name != "bpftool" || !hasArg(args, "feature") {
+					return output, err
+				}
+				return []byte(strings.Replace(string(output), " "+missing, "", 1)), nil
+			}
+			probe, request, _, cleanup := probeFixtureWithRunner(t, true, true, true, runner)
+			defer cleanup()
+
+			report, err := discovery.NewPreflight(probe).Check(context.Background(), request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if report.Supported {
+				t.Fatalf("preflight accepted missing helper %q: %+v", missing, report)
+			}
+			result, ok := report.HelperResults[missing]
+			if !ok {
+				t.Fatalf("missing helper %q was not reported: %+v", missing, report.HelperResults)
+			}
+			if result.Supported || result.ReasonCode != "BPF_HELPER_MISSING" || !strings.Contains(result.Detail, missing) {
+				t.Fatalf("unexpected result for missing helper %q: %+v", missing, result)
+			}
+		})
 	}
 }
 
@@ -390,7 +422,7 @@ func probeFixtureWithRunner(t *testing.T, mount, btf, cri bool, runner discovery
 func fakeCommandRunner(_ context.Context, name string, args ...string) ([]byte, error) {
 	switch name {
 	case "bpftool":
-		return []byte("bpf_map_lookup_elem bpf_map_update_elem bpf_get_hash_recalc bpf_skb_adjust_room bpf_skb_store_bytes bpf_l3_csum_replace bpf_spin_lock bpf_spin_unlock direct_action"), nil
+		return []byte("bpf_map_lookup_elem bpf_map_update_elem bpf_get_hash_recalc bpf_redirect bpf_skb_adjust_room bpf_skb_load_bytes bpf_skb_store_bytes bpf_l3_csum_replace bpf_spin_lock bpf_spin_unlock direct_action"), nil
 	case "tc":
 		for _, arg := range args {
 			if arg == "filter" {

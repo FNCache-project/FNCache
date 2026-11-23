@@ -19,8 +19,8 @@ func defaultCommandRunner(ctx context.Context, name string, args ...string) ([]b
 }
 
 var requiredBPFHelpers = []string{
-	"bpf_map_lookup_elem", "bpf_map_update_elem", "bpf_get_hash_recalc",
-	"bpf_skb_adjust_room", "bpf_skb_store_bytes", "bpf_l3_csum_replace", "bpf_spin_lock", "bpf_spin_unlock",
+	"bpf_map_lookup_elem", "bpf_map_update_elem", "bpf_get_hash_recalc", "bpf_redirect",
+	"bpf_skb_adjust_room", "bpf_skb_load_bytes", "bpf_skb_store_bytes", "bpf_l3_csum_replace", "bpf_spin_lock", "bpf_spin_unlock",
 }
 
 const reservedTOSMask uint32 = 0x04 | 0x08
