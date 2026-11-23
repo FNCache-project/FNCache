@@ -6,9 +6,11 @@
 #include <linux/if_ether.h>
 #include <linux/pkt_cls.h>
 #include <pthread.h>
+#include <sched.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdatomic.h>
 #include <string.h>
 #include <time.h>
 
@@ -38,6 +40,29 @@ struct race_arg {
     size_t len;
     uint32_t ifindex;
     int error;
+};
+
+struct ingress_mac_pair {
+    uint8_t dst[ETH_ALEN];
+    uint8_t src[ETH_ALEN];
+};
+
+struct ingress_race_arg {
+    struct bpf_program *prog;
+    uint8_t packet[PACKET_MAX];
+    size_t len;
+    uint32_t ifindex;
+    const struct ingress_mac_pair *pairs;
+    size_t pair_count;
+    atomic_int *start;
+    int mode;
+    int error;
+};
+
+enum ingress_race_mode {
+    INGRESS_RACE_WRITER,
+    INGRESS_RACE_RESTORE_READER,
+    INGRESS_RACE_MASQ_READER,
 };
 
 static int check(int condition, const char *message) {
@@ -592,6 +617,133 @@ static int ready_race(const char *path) {
     return failed;
 }
 
+static int ingress_mac_pair_matches(
+        const uint8_t *packet, const struct ingress_mac_pair *pairs,
+        size_t pair_count) {
+    for (size_t i = 0; i < pair_count; i++) {
+        if (!memcmp(packet, pairs[i].dst, ETH_ALEN) &&
+            !memcmp(packet + ETH_ALEN, pairs[i].src, ETH_ALEN)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void *ingress_race_run(void *arg) {
+    enum { ROUNDS = 256 };
+    struct ingress_race_arg *a = arg;
+
+    while (!atomic_load_explicit(a->start, memory_order_acquire)) sched_yield();
+    for (int round = 0; round < ROUNDS; round++) {
+        uint8_t output[PACKET_MAX];
+        int ret;
+        ret = run(a->prog, a->packet, a->len, a->ifindex, output);
+        if (ret < 0) {
+            a->error = 1;
+            continue;
+        }
+        if (a->mode == INGRESS_RACE_WRITER) {
+            if (ret != TC_ACT_OK) a->error = 1;
+        } else if (a->mode == INGRESS_RACE_RESTORE_READER) {
+            if (ret == TC_ACT_REDIRECT) {
+                if (!ingress_mac_pair_matches(output, a->pairs, a->pair_count)) {
+                    a->error = 1;
+                }
+            } else if (ret != TC_ACT_OK) {
+                a->error = 1;
+            }
+        } else if (ret != TC_ACT_OK && ret != TC_ACT_REDIRECT) {
+            a->error = 1;
+        }
+    }
+    return NULL;
+}
+
+static int ingress_cache_race(const char *path) {
+    enum { WRITERS = 4, READERS = 4, THREADS = WRITERS + READERS };
+    static const struct ingress_mac_pair pairs[] = {
+        {{0x55, 0x55, 0x55, 0x55, 0x55, 0x55},
+         {0x66, 0x66, 0x66, 0x66, 0x66, 0x66}},
+        {{0x10, 0x10, 0x10, 0x10, 0x10, 0x10},
+         {0x20, 0x20, 0x20, 0x20, 0x20, 0x20}},
+        {{0x11, 0x11, 0x11, 0x11, 0x11, 0x11},
+         {0x21, 0x21, 0x21, 0x21, 0x21, 0x21}},
+        {{0x12, 0x12, 0x12, 0x12, 0x12, 0x12},
+         {0x22, 0x22, 0x22, 0x22, 0x22, 0x22}},
+        {{0x13, 0x13, 0x13, 0x13, 0x13, 0x13},
+         {0x23, 0x23, 0x23, 0x23, 0x23, 0x23}},
+    };
+    struct env e;
+    atomic_int start = ATOMIC_VAR_INIT(0);
+    pthread_t threads[THREADS];
+    struct ingress_race_arg args[THREADS] = {};
+    int failed = 0;
+
+    if (load_env(path, &e) || control(&e, 1, 0, 0, UINT64_MAX) ||
+        seed_hit(&e, IF_IN, VXLAN_TEST_PORT, VXLAN_TEST_VNI)) {
+        return 1;
+    }
+
+    for (int i = 0; i < WRITERS; i++) {
+        args[i].prog = program(&e, "tc_init_in");
+        args[i].len = plain_packet(args[i].packet, 0x0c, IPPROTO_UDP,
+                                    IP_B, IP_A);
+        put16(args[i].packet + 34, htons(4321));
+        put16(args[i].packet + 36, htons(1234));
+        memcpy(args[i].packet, pairs[i + 1].dst, ETH_ALEN);
+        memcpy(args[i].packet + ETH_ALEN, pairs[i + 1].src, ETH_ALEN);
+        args[i].ifindex = IF_IN;
+        args[i].pairs = pairs;
+        args[i].pair_count = sizeof(pairs) / sizeof(pairs[0]);
+        args[i].start = &start;
+        args[i].mode = INGRESS_RACE_WRITER;
+    }
+    for (int i = 0; i < READERS; i++) {
+        struct ingress_race_arg *arg = &args[WRITERS + i];
+        arg->prog = program(&e, i & 1 ? "tc_masq" : "tc_restore");
+        if (i & 1) {
+            arg->len = plain_packet(arg->packet, 0x0c, IPPROTO_UDP,
+                                    IP_A, IP_B);
+        } else {
+            arg->len = vxlan_packet(arg->packet, 0, IP_B, IP_A, IP_NODE,
+                                     VXLAN_TEST_PORT, VXLAN_TEST_VNI);
+            put16(arg->packet + 84, htons(4321));
+            put16(arg->packet + 86, htons(1234));
+        }
+        arg->ifindex = IF_IN;
+        arg->pairs = pairs;
+        arg->pair_count = sizeof(pairs) / sizeof(pairs[0]);
+        arg->start = &start;
+        arg->mode = i & 1 ? INGRESS_RACE_MASQ_READER :
+                             INGRESS_RACE_RESTORE_READER;
+    }
+
+    for (int i = 0; i < THREADS; i++) {
+        if (pthread_create(&threads[i], NULL, ingress_race_run, &args[i])) {
+            atomic_store_explicit(&start, 1, memory_order_release);
+            for (int j = 0; j < i; j++) pthread_join(threads[j], NULL);
+            close_env(&e);
+            return 1;
+        }
+    }
+    atomic_store_explicit(&start, 1, memory_order_release);
+    for (int i = 0; i < THREADS; i++) pthread_join(threads[i], NULL);
+
+    for (int i = 0; i < THREADS; i++) failed |= args[i].error;
+    struct oncache_ingress_v1 final = {};
+    uint8_t final_mac[2 * ETH_ALEN];
+    uint32_t local = IP_A;
+    failed |= bpf_map_lookup_elem(e.ingress, &local, &final);
+    memcpy(final_mac, final.dst_mac, ETH_ALEN);
+    memcpy(final_mac + ETH_ALEN, final.src_mac, ETH_ALEN);
+    failed |= check(final.ifindex == IF_OUT &&
+                    ingress_mac_pair_matches(final_mac, pairs,
+                                             sizeof(pairs) / sizeof(pairs[0])),
+                    "ingress cache remains a complete value under concurrency");
+    close_env(&e);
+    return failed;
+}
+
 static int fallback_icmp_tests(const char *path) {
     struct env e;
     uint8_t packet[PACKET_MAX], output[PACKET_MAX];
@@ -641,6 +793,8 @@ int main(int argc, char **argv) {
     if (fallback_icmp_tests(argv[1])) return 1;
     puts("ready-race");
     if (ready_race(argv[1])) return 1;
+    puts("ingress-cache-race");
+    if (ingress_cache_race(argv[1])) return 1;
     puts("helper-faults");
     if (fault_tests(argv[2], "adjust") || fault_tests(argv[3], "store") ||
         fault_tests(argv[4], "redirect")) return 1;
