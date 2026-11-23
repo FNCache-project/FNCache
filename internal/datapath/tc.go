@@ -53,6 +53,10 @@ type legacyFilterMigrator interface {
 	MigrateLegacyFilter(context.Context, TCFilterState, TCFilterSpec) (TCFilterState, bool, error)
 }
 
+type legacyMigrationFinalizer interface {
+	finalizeLegacyMigrations(context.Context, []TCFilterState) error
+}
+
 type TCManager struct {
 	backend TCBackend
 	netns   *NetNSManager
@@ -188,6 +192,13 @@ func (m *TCManager) EnsureFilter(ctx context.Context, spec TCFilterSpec) (TCFilt
 		return nil
 	})
 	return result, err
+}
+
+func (m *TCManager) finalizeLegacyMigrations(ctx context.Context, filters []TCFilterState) error {
+	if finalizer, ok := m.backend.(legacyMigrationFinalizer); ok {
+		return finalizer.finalizeLegacyMigrations(ctx, filters)
+	}
+	return nil
 }
 
 func (m *TCManager) RemoveFilter(ctx context.Context, spec TCFilterSpec) error {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
 	"github.com/cilium/ebpf"
@@ -39,15 +40,29 @@ type tcNetlinkAPI interface {
 type tcProgram interface {
 	FD() int
 	ProgramID() (uint32, error)
+	Unpin() error
 	Close() error
 }
 type tcProgramLoader interface {
 	Load(string) (tcProgram, error)
 }
 type linuxTCBackend struct {
-	pinRoot string
-	api     tcNetlinkAPI
-	loader  tcProgramLoader
+	pinRoot       string
+	api           tcNetlinkAPI
+	loader        tcProgramLoader
+	filterMu      sync.Mutex
+	pendingMu     sync.Mutex
+	pendingLegacy map[string][]pendingLegacyMigration
+}
+
+type pendingLegacyMigration struct {
+	path          string
+	legacyProgram string
+	programID     uint32
+	rollback      bool
+	link          endpoint.LinkIdentity
+	oldFilter     kernelFilter
+	newFilter     kernelFilter
 }
 
 func NewLinuxTCBackend(pinRoot string) (TCBackend, error) {
@@ -60,7 +75,7 @@ func newLinuxTCBackend(pinRoot string, api tcNetlinkAPI, loader tcProgramLoader)
 	if api == nil || loader == nil {
 		return nil, fmt.Errorf("TC backend dependencies are required")
 	}
-	return &linuxTCBackend{pinRoot: filepath.Clean(pinRoot), api: api, loader: loader}, nil
+	return &linuxTCBackend{pinRoot: filepath.Clean(pinRoot), api: api, loader: loader, pendingLegacy: make(map[string][]pendingLegacyMigration)}, nil
 }
 func (b *linuxTCBackend) EnsureClsact(ctx context.Context, link endpoint.LinkIdentity) (TCQdiscState, error) {
 	if err := validateLink(link); err != nil {
@@ -87,6 +102,12 @@ func (b *linuxTCBackend) EnsureClsact(ctx context.Context, link endpoint.LinkIde
 	return TCQdiscState{Link: link, Exists: true, CreatedByOncache: true}, nil
 }
 func (b *linuxTCBackend) ListFilters(ctx context.Context, link endpoint.LinkIdentity) ([]TCFilterState, error) {
+	b.filterMu.Lock()
+	defer b.filterMu.Unlock()
+	return b.listFilters(ctx, link)
+}
+
+func (b *linuxTCBackend) listFilters(ctx context.Context, link endpoint.LinkIdentity) ([]TCFilterState, error) {
 	if err := validateLink(link); err != nil {
 		return nil, err
 	}
@@ -116,6 +137,8 @@ func (b *linuxTCBackend) ListFilters(ctx context.Context, link endpoint.LinkIden
 }
 
 func (b *linuxTCBackend) AttachFilter(ctx context.Context, spec TCFilterSpec) (TCFilterState, error) {
+	b.filterMu.Lock()
+	defer b.filterMu.Unlock()
 	if err := validateFilterSpec(spec); err != nil {
 		return TCFilterState{}, err
 	}
@@ -146,6 +169,8 @@ func (b *linuxTCBackend) AttachFilter(ctx context.Context, spec TCFilterSpec) (T
 }
 
 func (b *linuxTCBackend) MigrateLegacyFilter(ctx context.Context, current TCFilterState, spec TCFilterSpec) (TCFilterState, bool, error) {
+	b.filterMu.Lock()
+	defer b.filterMu.Unlock()
 	legacyName, ok := legacyProgramNames[spec.Program]
 	if !ok || !sameLink(current.Link, spec.Link) || current.Hook != spec.Hook ||
 		current.Priority != spec.Priority || current.Handle != spec.Handle {
@@ -206,17 +231,211 @@ func (b *linuxTCBackend) MigrateLegacyFilter(ctx context.Context, current TCFilt
 		}
 		return TCFilterState{}, true, fmt.Errorf("attach migrated BPF filter %s: %w", spec.Program, err)
 	}
+	b.queueLegacyMigration(pendingLegacyMigration{
+		path: legacyPath, legacyProgram: current.Program, programID: legacyID, rollback: true, link: spec.Link,
+		oldFilter: oldFilter, newFilter: newFilter,
+	})
 	return TCFilterState{Link: spec.Link, Hook: spec.Hook, Program: spec.Program, ProgramID: spec.ProgramID, Priority: spec.Priority, Handle: spec.Handle, DirectAction: spec.DirectAction}, true, nil
 }
 
+func (b *linuxTCBackend) queueLegacyMigration(migration pendingLegacyMigration) {
+	b.pendingMu.Lock()
+	defer b.pendingMu.Unlock()
+	for _, pending := range b.pendingLegacy[migration.path] {
+		if pending.link.NetNSInode == migration.link.NetNSInode && pending.link.IfIndex == migration.link.IfIndex &&
+			pending.oldFilter.Parent == migration.oldFilter.Parent && pending.oldFilter.Priority == migration.oldFilter.Priority && pending.oldFilter.Handle == migration.oldFilter.Handle {
+			return
+		}
+	}
+	b.pendingLegacy[migration.path] = append(b.pendingLegacy[migration.path], migration)
+}
+
+func (b *linuxTCBackend) finalizeLegacyMigrations(ctx context.Context, filters []TCFilterState) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	b.filterMu.Lock()
+	defer b.filterMu.Unlock()
+	pending := b.snapshotLegacyMigrations()
+	rediscovered, err := b.rediscoverLegacyMigrations(ctx, filters)
+	if err != nil {
+		return err
+	}
+	for path, migrations := range rediscovered {
+		if _, ok := pending[path]; !ok {
+			pending[path] = migrations
+		}
+	}
+	for path, migrations := range pending {
+		if hasLegacyFilter(filters, migrations) {
+			continue
+		}
+		if err := b.removeLegacyPin(ctx, path, migrations); err != nil {
+			return err
+		}
+		b.forgetLegacyMigration(path)
+	}
+	return nil
+}
+
+func (b *linuxTCBackend) snapshotLegacyMigrations() map[string][]pendingLegacyMigration {
+	b.pendingMu.Lock()
+	defer b.pendingMu.Unlock()
+	pending := make(map[string][]pendingLegacyMigration, len(b.pendingLegacy))
+	for path, migrations := range b.pendingLegacy {
+		pending[path] = append([]pendingLegacyMigration(nil), migrations...)
+	}
+	return pending
+}
+
+func (b *linuxTCBackend) forgetLegacyMigration(path string) {
+	b.pendingMu.Lock()
+	defer b.pendingMu.Unlock()
+	delete(b.pendingLegacy, path)
+}
+
+func (b *linuxTCBackend) rediscoverLegacyMigrations(ctx context.Context, filters []TCFilterState) (map[string][]pendingLegacyMigration, error) {
+	rediscovered := make(map[string][]pendingLegacyMigration)
+	for currentName, legacyName := range legacyProgramNames {
+		var currentFilter TCFilterState
+		found := false
+		for _, filter := range filters {
+			if filter.Program == currentName && filter.ProgramID != 0 && filter.DirectAction && isFixedAttachment(filter) {
+				currentFilter, found = filter, true
+				break
+			}
+		}
+		if !found {
+			continue
+		}
+		currentPath := filepath.Join(b.pinRoot, "programs", currentName)
+		currentProgram, err := b.loader.Load(currentPath)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("load current pinned program %s for legacy cleanup: %w", currentName, err)
+		}
+		currentID, idErr := currentProgram.ProgramID()
+		currentProgram.Close()
+		if idErr != nil || currentID != currentFilter.ProgramID {
+			continue
+		}
+		legacyPath := filepath.Join(b.pinRoot, "programs", legacyName)
+		if _, err := os.Stat(legacyPath); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("inspect legacy program pin %s for cleanup: %w", legacyName, err)
+		}
+		legacy, err := b.loader.Load(legacyPath)
+		if err != nil {
+			return nil, fmt.Errorf("load legacy pinned program %s for cleanup: %w", legacyName, err)
+		}
+		legacyID, idErr := legacy.ProgramID()
+		legacy.Close()
+		if idErr != nil {
+			continue
+		}
+		migration := pendingLegacyMigration{path: legacyPath, legacyProgram: legacyName, programID: legacyID}
+		if hasLegacyFilter(filters, []pendingLegacyMigration{migration}) {
+			continue
+		}
+		rediscovered[legacyPath] = []pendingLegacyMigration{migration}
+	}
+	return rediscovered, nil
+}
+
+func hasLegacyFilter(filters []TCFilterState, migrations []pendingLegacyMigration) bool {
+	for _, migration := range migrations {
+		for _, filter := range filters {
+			if filter.ProgramID != migration.programID {
+				continue
+			}
+			if migration.legacyProgram == "" || filter.Program == migration.legacyProgram {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (b *linuxTCBackend) removeLegacyPin(ctx context.Context, path string, migrations []pendingLegacyMigration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	program, err := b.loader.Load(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("load legacy pinned program for cleanup: %w", err)
+	}
+	defer program.Close()
+	programID, err := program.ProgramID()
+	if err != nil {
+		return fmt.Errorf("inspect legacy pinned program for cleanup: %w", err)
+	}
+	if programID != migrations[0].programID {
+		return safetyError(fmt.Sprintf("legacy pinned program identity changed before cleanup: got %d want %d", programID, migrations[0].programID))
+	}
+	if err := program.Unpin(); err != nil {
+		if migrations[0].rollback {
+			if rollbackErr := b.rollbackLegacyMigrations(ctx, migrations, program.FD()); rollbackErr != nil {
+				return safetyError(fmt.Sprintf("legacy BPF pin removal failed and rollback failed: remove=%v rollback=%v", err, rollbackErr))
+			}
+		}
+		if migrations[0].rollback {
+			return fmt.Errorf("remove legacy BPF program pin %s: %w", filepath.Base(path), err)
+		}
+		return fmt.Errorf("remove rediscovered legacy BPF program pin %s: %w", filepath.Base(path), err)
+	}
+	return nil
+}
+
+func (b *linuxTCBackend) rollbackLegacyMigrations(ctx context.Context, migrations []pendingLegacyMigration, legacyFD int) error {
+	for _, migration := range migrations {
+		if err := b.deleteMigratedFilterIfOwned(ctx, migration); err != nil {
+			return err
+		}
+		restore := migration.oldFilter
+		restore.FD = legacyFD
+		if err := b.api.addFilter(ctx, migration.link, restore); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *linuxTCBackend) deleteMigratedFilterIfOwned(ctx context.Context, migration pendingLegacyMigration) error {
+	filters, err := b.api.listFilters(ctx, migration.link, migration.newFilter.Parent)
+	if err != nil {
+		return fmt.Errorf("recheck migrated BPF filter before rollback: %w", err)
+	}
+	for _, filter := range filters {
+		if filter.LinkIndex != migration.newFilter.LinkIndex || filter.Parent != migration.newFilter.Parent ||
+			filter.Priority != migration.newFilter.Priority || filter.Handle != migration.newFilter.Handle {
+			continue
+		}
+		if filter.Kind != migration.newFilter.Kind || filter.Program != migration.newFilter.Program ||
+			filter.ProgramID != migration.newFilter.ProgramID || filter.DirectAction != migration.newFilter.DirectAction {
+			return safetyError("refusing to delete a replacement TC filter during legacy migration rollback")
+		}
+		return b.api.deleteFilter(ctx, migration.link, migration.newFilter)
+	}
+	return safetyError("migrated TC filter disappeared before legacy migration rollback")
+}
+
 func (b *linuxTCBackend) RemoveFilter(ctx context.Context, spec TCFilterSpec) error {
+	b.filterMu.Lock()
+	defer b.filterMu.Unlock()
 	if err := validateFilterSpec(spec); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	filters, err := b.ListFilters(ctx, spec.Link)
+	filters, err := b.listFilters(ctx, spec.Link)
 	if err != nil {
 		return fmt.Errorf("recheck TC filters before deletion: %w", err)
 	}
@@ -427,5 +646,7 @@ func (p *ebpfTCProgram) ProgramID() (uint32, error) {
 	}
 	return uint32(id), nil
 }
+
+func (p *ebpfTCProgram) Unpin() error { return p.program.Unpin() }
 
 func (p *ebpfTCProgram) Close() error { return p.program.Close() }
