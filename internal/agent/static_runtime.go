@@ -12,6 +12,7 @@ import (
 	"github.com/cat-cc-Lcos/FNCache/internal/endpoint"
 	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/discovery"
 	"github.com/cat-cc-Lcos/FNCache/internal/hostnet/flannel"
+	"github.com/cat-cc-Lcos/FNCache/internal/observability"
 	"github.com/cat-cc-Lcos/FNCache/internal/reconcile"
 )
 
@@ -48,14 +49,23 @@ type StaticRuntime struct {
 	ownership       localOwnershipSource
 	remover         *controlplane.EndpointRemover
 	publisher       *controlplane.Publisher
+	logger          observability.EventLogger
 }
 
 func NewStaticRuntime(ctx context.Context, config StaticRuntimeConfig) (*StaticRuntime, error) {
+	return NewStaticRuntimeWithLogger(ctx, config, observability.NewDefault("agent"))
+}
+
+func NewStaticRuntimeWithLogger(ctx context.Context, config StaticRuntimeConfig, logger observability.EventLogger) (*StaticRuntime, error) {
 	config.Preflight.InstallationID = config.InstallationID
 	config.Preflight.ELFBuildID = config.ELFBuildID
 	if err := validateStaticRuntimeConfig(config); err != nil {
 		return nil, err
 	}
+	if logger == nil {
+		logger = observability.NewDefault("agent")
+	}
+	logger = scopedLogger(logger, "agent", config.Preflight.Node.Name)
 	components, err := newDatapathComponents(ctx, datapathComponentConfig{
 		ELFPath: config.ELFPath, PinRoot: config.PinRoot, StatePath: config.StatePath, InstallationID: config.InstallationID,
 		ELFBuildID: config.ELFBuildID, HeartbeatNS: config.HeartbeatNS, HeartbeatTimeoutNS: config.HeartbeatTimeoutNS,
@@ -73,6 +83,7 @@ func NewStaticRuntime(ctx context.Context, config StaticRuntimeConfig) (*StaticR
 		config: config, cri: components.cri, endpointScanner: components.endpointScanner, pins: components.pins, tcScanner: components.tcScanner,
 		sources: components.sources, control: components.control, collection: components.collection, marker: components.marker,
 		base: components.base, endpoint: components.endpoint, maps: components.maps, ownership: components.ownership, remover: remover, publisher: components.publisher,
+		logger: logger,
 	}
 	return runtime, nil
 }
@@ -100,7 +111,7 @@ func (r *StaticRuntime) RunOnce(ctx context.Context) (reconcile.ReconcileResult,
 	if err != nil {
 		return reconcile.ReconcileResult{}, err
 	}
-	coordinator, err := reconcile.NewCoordinator(backend)
+	coordinator, err := reconcile.NewCoordinator(backend, reconcileEventLogger(scopedLogger(r.logger, "reconcile", r.config.Preflight.Node.Name)))
 	if err != nil {
 		return reconcile.ReconcileResult{}, err
 	}

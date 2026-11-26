@@ -67,6 +67,36 @@ func TestCoordinatorFullReconcilePublishesVerifiedState(t *testing.T) {
 	}
 }
 
+func TestCoordinatorEmitsCorrelationEvents(t *testing.T) {
+	backend := &fakeBackend{desired: DesiredState{Generation: 42, Enabled: true}}
+	var events []ReconcileEvent
+	coordinator, err := NewCoordinator(backend, func(_ context.Context, event ReconcileEvent) {
+		events = append(events, event)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coordinator.FullReconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var started, completed, transitioned bool
+	for _, event := range events {
+		switch event.Message {
+		case "reconcile started":
+			started = event.Attempt == 1 && event.Reason == "RECONCILE_STARTED"
+		case "reconcile completed":
+			completed = event.Generation == 42 && event.Duration > 0 && event.Reason == "RECONCILE_SUCCEEDED"
+		case "agent state transition":
+			if event.From == AgentBootstrapping && event.To == AgentReconciling {
+				transitioned = true
+			}
+		}
+	}
+	if !started || !completed || !transitioned {
+		t.Fatalf("missing correlation events: %+v", events)
+	}
+}
+
 func TestCoordinatorTreatsDisabledDesiredStateAsSafeTerminalState(t *testing.T) {
 	backend := &fakeBackend{desired: DesiredState{Generation: 43}}
 	coordinator, err := NewCoordinator(backend)
