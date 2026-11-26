@@ -1,12 +1,15 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"testing"
+	"time"
 
 	"k8s.io/client-go/kubernetes/fake"
 
@@ -67,6 +70,54 @@ func TestStatusClearsStaleDatapathMetadataAfterObservedDisabled(t *testing.T) {
 	got := runtime.Status(context.Background())
 	if got.DatapathEnabled || got.Generation != 0 || got.Reason != "DATAPATH_DISABLED" {
 		t.Fatalf("status retained stale datapath metadata: %+v", got)
+	}
+}
+
+func TestStatusLogsHealthFailureAndRecovery(t *testing.T) {
+	var output bytes.Buffer
+	logger, err := observability.New(observability.LoggingConfig{
+		Level: "debug", Component: "agent", Node: "node-a", Writer: &output, RateInterval: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &DynamicRuntime{
+		config:      dynamicTestConfig(),
+		snapshots:   observability.NewSnapshotStore(),
+		lifecycle:   reconcile.NewAgentStateMachine(),
+		healthEpoch: NewHealthEpoch(),
+		logger:      logger,
+	}
+	if err := runtime.lifecycle.Transition(reconcile.AgentReconciling); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.lifecycle.Transition(reconcile.AgentReady); err != nil {
+		t.Fatal(err)
+	}
+	runtime.setDatapathUnavailable("DATAPATH_STATE_UNAVAILABLE")
+	runtime.Status(context.Background())
+	runtime.setDatapathStatus(true, 42)
+	runtime.Status(context.Background())
+	runtime.setDatapathUnavailable("DATAPATH_STATE_UNAVAILABLE")
+	runtime.Status(context.Background())
+
+	lines := bytes.Split(bytes.TrimSpace(output.Bytes()), []byte{'\n'})
+	if len(lines) != 2 {
+		t.Fatalf("health transition log count = %d, output=%s", len(lines), output.String())
+	}
+	seen := map[string]map[string]any{}
+	for _, line := range lines {
+		var record map[string]any
+		if err := json.Unmarshal(line, &record); err != nil {
+			t.Fatal(err)
+		}
+		seen[record["msg"].(string)] = record
+	}
+	if seen["health recovered"]["reason"] != "DATAPATH_RECOVERED" || seen["health recovered"]["generation"] != float64(42) {
+		t.Fatalf("recovery event = %#v", seen["health recovered"])
+	}
+	if seen["health failure"]["reason"] != "DATAPATH_DISABLED" || seen["health failure"]["generation"] != float64(42) {
+		t.Fatalf("failure event = %#v", seen["health failure"])
 	}
 }
 

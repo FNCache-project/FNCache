@@ -12,13 +12,12 @@ import (
 // value that was published. It only reads agent-owned state: all BPF and
 // Kubernetes observations are produced by background workers and copied into
 // the snapshot when those workers finish.
-func (r *DynamicRuntime) Status(_ context.Context) observability.Snapshot {
+func (r *DynamicRuntime) Status(ctx context.Context) observability.Snapshot {
 	snapshot := unavailableSnapshot()
 	if r == nil {
 		return snapshot
 	}
 	r.statusPublishMu.Lock()
-	defer r.statusPublishMu.Unlock()
 
 	snapshot.State = reconcile.AgentBootstrapping
 	snapshot.Reason = ""
@@ -64,6 +63,21 @@ func (r *DynamicRuntime) Status(_ context.Context) observability.Snapshot {
 	if r.snapshots != nil {
 		r.snapshots.Update(snapshot)
 	}
+	var events []observability.Event
+	if r.hasStatus {
+		events = healthTransitionEvents(r.lastStatus, snapshot)
+	}
+	r.lastStatus = snapshot
+	r.hasStatus = true
+	dispatcher := r.queueHealthEvents(ctx, events)
+	r.statusPublishMu.Unlock()
+	if dispatcher != nil {
+		dispatcher.flush()
+	} else {
+		for _, event := range events {
+			logEvent(ctx, r.logger, event)
+		}
+	}
 	return snapshot
 }
 
@@ -78,6 +92,27 @@ func (r *DynamicRuntime) SnapshotStore() *observability.SnapshotStore {
 func (r *DynamicRuntime) HTTPAddress() string { return r.config.Server.ListenAddress }
 
 func (r *DynamicRuntime) DebugStateEnabled() bool { return r.config.Features.DebugState }
+
+func (r *DynamicRuntime) currentGeneration() uint64 {
+	if r == nil {
+		return 0
+	}
+	r.statusMu.RLock()
+	defer r.statusMu.RUnlock()
+	return r.datapathGeneration
+}
+
+func (r *DynamicRuntime) lastKnownGeneration() uint64 {
+	if r == nil {
+		return 0
+	}
+	r.statusMu.RLock()
+	defer r.statusMu.RUnlock()
+	if r.datapathGeneration != 0 {
+		return r.datapathGeneration
+	}
+	return r.lastDatapathGeneration
+}
 
 func unavailableSnapshot() observability.Snapshot {
 	return observability.Snapshot{
@@ -98,6 +133,9 @@ func (r *DynamicRuntime) setDatapathStatus(ready bool, generation uint64) {
 	r.statusMu.Lock()
 	r.datapathReady = ready
 	r.datapathGeneration = generation
+	if generation != 0 {
+		r.lastDatapathGeneration = generation
+	}
 	r.datapathReason = ""
 	r.statusMu.Unlock()
 }

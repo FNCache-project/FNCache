@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -50,11 +51,16 @@ type DynamicRuntime struct {
 	scanScheduler  *ScanScheduler
 	statsCollector *datapath.StatsCollector
 
-	statusMu           sync.RWMutex
-	statusPublishMu    sync.Mutex
-	datapathReady      bool
-	datapathGeneration uint64
-	datapathReason     string
+	statusMu               sync.RWMutex
+	statusPublishMu        sync.Mutex
+	healthEventMu          sync.RWMutex
+	healthEvents           *healthEventDispatcher
+	lastStatus             observability.Snapshot
+	hasStatus              bool
+	datapathReady          bool
+	datapathGeneration     uint64
+	lastDatapathGeneration uint64
+	datapathReason         string
 }
 
 var ErrKubernetesSnapshotNotReady = errors.New("kubernetes snapshot is not ready")
@@ -76,6 +82,10 @@ func (b dynamicObservationBackend) Scan(ctx context.Context) (reconcile.ActualSt
 }
 
 func NewDynamicRuntime(configPath string) (*DynamicRuntime, error) {
+	return NewDynamicRuntimeWithLogger(configPath, observability.NewDefault("agent"))
+}
+
+func NewDynamicRuntimeWithLogger(configPath string, logger observability.EventLogger) (*DynamicRuntime, error) {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("load agent configuration: %w", err)
@@ -88,7 +98,7 @@ func NewDynamicRuntime(configPath string) (*DynamicRuntime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create Kubernetes client: %w", err)
 	}
-	return newDynamicRuntime(cfg, client)
+	return newDynamicRuntimeWithLogger(cfg, client, logger)
 }
 
 func newDynamicRuntime(cfg config.AgentConfiguration, client k8skubernetes.Interface) (*DynamicRuntime, error) {
@@ -96,7 +106,11 @@ func newDynamicRuntime(cfg config.AgentConfiguration, client k8skubernetes.Inter
 }
 
 func newDynamicRuntimeWithFactory(cfg config.AgentConfiguration, client k8skubernetes.Interface, factory datapathComponentFactory) (*DynamicRuntime, error) {
-	return newDynamicRuntimeWithFactoryAndLogger(cfg, client, factory, observability.NewDefault("queue"))
+	return newDynamicRuntimeWithFactoryAndLogger(cfg, client, factory, observability.NewDefault("agent"))
+}
+
+func newDynamicRuntimeWithLogger(cfg config.AgentConfiguration, client k8skubernetes.Interface, logger observability.EventLogger) (*DynamicRuntime, error) {
+	return newDynamicRuntimeWithFactoryAndLogger(cfg, client, newDatapathComponents, logger)
 }
 
 func newDynamicRuntimeWithFactoryAndLogger(cfg config.AgentConfiguration, client k8skubernetes.Interface, factory datapathComponentFactory, logger observability.EventLogger) (*DynamicRuntime, error) {
@@ -107,8 +121,9 @@ func newDynamicRuntimeWithFactoryAndLogger(cfg config.AgentConfiguration, client
 		return nil, fmt.Errorf("Kubernetes client is required")
 	}
 	if logger == nil {
-		logger = observability.NewDefault("queue")
+		logger = observability.NewDefault("agent")
 	}
+	logger = scopedLogger(logger, "agent", cfg.NodeName)
 	var statsCollector *datapath.StatsCollector
 	if cfg.Observability.DatapathCounters.Enabled {
 		collector, err := datapath.NewStatsCollector(cfg.PinRoot)
@@ -159,9 +174,41 @@ func newDynamicRuntimeWithFactoryAndLogger(cfg config.AgentConfiguration, client
 }
 
 // Run starts the dynamic runtime and blocks until it stops or fails.
-func (r *DynamicRuntime) Run(ctx context.Context) error {
+func (r *DynamicRuntime) Run(ctx context.Context) (runErr error) {
+	r.startHealthEventDispatcher()
+	defer r.stopHealthEventDispatcher()
+	started := time.Now()
+	logEvent(ctx, r.logger, observability.Event{
+		Level: slog.LevelInfo, Message: "runtime started",
+		Attrs: []any{"kind", "Agent", "reason", "STARTUP", "class", "Lifecycle"},
+	})
+	defer func() {
+		level := slog.LevelInfo
+		message := "runtime stopped"
+		reason := "SHUTDOWN"
+		class := "Lifecycle"
+		attrs := []any{"kind", "Agent", "reason", reason, "class", class, "duration", observability.DurationMillis(time.Since(started))}
+		if generation := r.lastKnownGeneration(); generation != 0 {
+			attrs = append(attrs, "generation", generation)
+		}
+		if runErr != nil {
+			level = slog.LevelError
+			message = "runtime failed"
+			reason = "RUNTIME_FAILED"
+			class = string(reconcile.ErrorInternal)
+			attrs[3] = reason
+			attrs[5] = class
+			attrs = append(attrs, "error", runErr.Error())
+		}
+		event := observability.Event{Level: level, Message: message, RateLimitKey: "runtime:" + reason, Attrs: attrs}
+		if dispatcher := r.queueHealthEvents(context.Background(), []observability.Event{event}); dispatcher == nil {
+			logEvent(context.Background(), r.logger, event)
+		} else {
+			dispatcher.flush()
+		}
+	}()
 	if !r.config.Features.Enabled {
-		if err := r.lifecycle.Transition(reconcile.AgentDisabled); err != nil {
+		if err := r.transition(ctx, reconcile.AgentDisabled); err != nil {
 			return err
 		}
 		r.Status(ctx)
@@ -170,19 +217,19 @@ func (r *DynamicRuntime) Run(ctx context.Context) error {
 	}
 	r.Status(ctx)
 	if err := r.bootstrap.Start(ctx); err != nil {
-		if transitionErr := r.lifecycle.Transition(reconcile.AgentDisabled); transitionErr != nil {
+		if transitionErr := r.transition(ctx, reconcile.AgentDisabled); transitionErr != nil {
 			r.Status(ctx)
 			return errors.Join(err, transitionErr)
 		}
 		r.Status(ctx)
 		return err
 	}
-	if err := r.lifecycle.Transition(reconcile.AgentReconciling); err != nil {
+	if err := r.transition(ctx, reconcile.AgentReconciling); err != nil {
 		return err
 	}
 	r.Status(ctx)
 	if err := r.initializeDatapathWithRetry(ctx); err != nil {
-		if transitionErr := r.lifecycle.Transition(reconcile.AgentDisabled); transitionErr != nil {
+		if transitionErr := r.transition(ctx, reconcile.AgentDisabled); transitionErr != nil {
 			r.Status(ctx)
 			return errors.Join(err, transitionErr)
 		}
@@ -191,7 +238,7 @@ func (r *DynamicRuntime) Run(ctx context.Context) error {
 	}
 	if err := r.reconcileInitial(ctx); err != nil {
 		if errors.Is(err, errInitialDiscoveryUnsupported) {
-			if transitionErr := r.lifecycle.Transition(reconcile.AgentDisabled); transitionErr != nil {
+			if transitionErr := r.transition(ctx, reconcile.AgentDisabled); transitionErr != nil {
 				_ = r.components.Close()
 				r.Status(ctx)
 				return transitionErr
@@ -201,7 +248,7 @@ func (r *DynamicRuntime) Run(ctx context.Context) error {
 			<-ctx.Done()
 			return r.components.Close()
 		}
-		if transitionErr := r.lifecycle.Transition(reconcile.AgentDisabled); transitionErr != nil {
+		if transitionErr := r.transition(ctx, reconcile.AgentDisabled); transitionErr != nil {
 			_ = r.components.Close()
 			r.Status(ctx)
 			return errors.Join(err, transitionErr)
@@ -219,7 +266,7 @@ func (r *DynamicRuntime) Run(ctx context.Context) error {
 		r.worker.Run(runCtx)
 		close(workerDone)
 	}()
-	if err := r.lifecycle.Transition(reconcile.AgentReady); err != nil {
+	if err := r.transition(ctx, reconcile.AgentReady); err != nil {
 		cancel()
 		r.queue.ShutDown()
 		<-workerDone
@@ -255,7 +302,6 @@ func (r *DynamicRuntime) Run(ctx context.Context) error {
 	r.queue.ShutDown()
 	heartbeatObserved := stopResult.heartbeatObserved
 	failureErr := stopResult.failureErr
-	var runErr error
 	stopErr := stopResult.stopErr
 	stoppingRequested := stopResult.stoppingRequested
 	shutdownTimeout := time.Duration(r.config.Heartbeat.Timeout) + time.Second
@@ -284,7 +330,7 @@ func (r *DynamicRuntime) Run(ctx context.Context) error {
 		disableCtx, disableCancel := context.WithTimeout(context.Background(), time.Duration(r.config.Heartbeat.Timeout))
 		disableErr := r.components.control.Disable(disableCtx)
 		disableCancel()
-		degradedErr := r.lifecycle.Transition(reconcile.AgentDegraded)
+		degradedErr := r.transition(context.Background(), reconcile.AgentDegraded)
 		runErr = errors.Join(failureErr, disableErr, degradedErr)
 		r.Status(context.Background())
 	}
@@ -333,7 +379,7 @@ func (r *DynamicRuntime) waitForRuntimeStop(ctx context.Context, stopCh <-chan s
 			r.healthEpoch.Invalidate()
 			if ctx.Err() != nil {
 				result.stoppingRequested = true
-				result.stopErr = r.lifecycle.Transition(reconcile.AgentStopping)
+				result.stopErr = r.transition(context.Background(), reconcile.AgentStopping)
 			} else {
 				if heartbeatErr == nil {
 					heartbeatErr = fmt.Errorf("heartbeat refresher stopped unexpectedly")
@@ -362,7 +408,7 @@ func (r *DynamicRuntime) waitForRuntimeStop(ctx context.Context, stopCh <-chan s
 		case <-stopCh:
 			r.healthEpoch.Invalidate()
 			result.stoppingRequested = true
-			result.stopErr = r.lifecycle.Transition(reconcile.AgentStopping)
+			result.stopErr = r.transition(context.Background(), reconcile.AgentStopping)
 			r.Status(context.Background())
 			return result
 		}
@@ -374,19 +420,23 @@ func (r *DynamicRuntime) handleClosedScanResults(ctx context.Context, stoppingRe
 	r.healthEpoch.Invalidate()
 	if ctx.Err() != nil {
 		*stoppingRequested = true
-		return r.lifecycle.Transition(reconcile.AgentStopping), nil
+		return r.transition(ctx, reconcile.AgentStopping), nil
 	}
 	return nil, fmt.Errorf("scan scheduler stopped unexpectedly")
 }
 
 // initializeDatapathWithRetry waits for transient startup dependencies without ignoring cancellation.
 func (r *DynamicRuntime) initializeDatapathWithRetry(ctx context.Context) error {
+	attempt := 0
 	for {
+		attempt++
+		started := time.Now()
 		if err := r.initializeDatapath(ctx); err == nil {
 			return nil
 		} else if delay, retry := initialDatapathRetry(err); !retry {
 			return err
 		} else {
+			retryEvent(r.logger, ctx, "Agent", err, attempt, time.Since(started), delay)
 			timer := time.NewTimer(delay)
 			select {
 			case <-ctx.Done():
@@ -445,11 +495,13 @@ func (r *DynamicRuntime) reconcileInitial(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create initial reconciliation backend: %w", err)
 	}
-	coordinator, err := reconcile.NewCoordinator(backend)
+	coordinator, err := reconcile.NewCoordinator(backend, reconcileEventLogger(scopedLogger(r.logger, "reconcile", r.config.NodeName)))
 	if err != nil {
 		return fmt.Errorf("create initial reconciliation coordinator: %w", err)
 	}
+	attempt := 0
 	for {
+		attempt++
 		result, err := coordinator.FullReconcile(ctx)
 		if err == nil {
 			if result.State != reconcile.AgentReady {
@@ -459,6 +511,7 @@ func (r *DynamicRuntime) reconcileInitial(ctx context.Context) error {
 			return nil
 		}
 		if delay, retry := initialReconcileRetry(err); retry {
+			retryEvent(r.logger, ctx, "Global", err, attempt, 0, delay)
 			timer := time.NewTimer(delay)
 			select {
 			case <-ctx.Done():
@@ -678,7 +731,9 @@ func (r *DynamicRuntime) initializeDatapath(ctx context.Context) error {
 		_ = components.Close()
 		return err
 	}
-	worker, err := queue.NewWorkerWithBarrierAndLogger(r.queue, router.Handle, r.barrier, r.logger)
+	worker, err := queue.NewWorkerWithBarrierAndLoggerAndGeneration(
+		r.queue, router.Handle, r.barrier, scopedLogger(r.logger, "queue", r.config.NodeName), r.currentGeneration,
+	)
 	if err != nil {
 		_ = components.Close()
 		return err

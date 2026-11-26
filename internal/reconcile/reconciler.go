@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // ReconcileBackend keeps orchestration independent from kernel and runtime APIs.
@@ -23,25 +24,50 @@ type Reconciler interface {
 	State() AgentState
 }
 
-type Coordinator struct {
-	backend   ReconcileBackend
-	gate      chan struct{}
-	lifecycle *AgentStateMachine
+// ReconcileEvent is the dependency-neutral event emitted by a Coordinator.
+// The reconcile package deliberately does not depend on observability so that
+// callers can adapt these events to their chosen logging implementation.
+type ReconcileEvent struct {
+	Message    string
+	Kind       ReconcileKind
+	From       AgentState
+	To         AgentState
+	Generation uint64
+	Reason     string
+	Class      string
+	Attempt    int
+	Duration   time.Duration
+	Err        error
 }
 
-func NewCoordinator(backend ReconcileBackend) (*Coordinator, error) {
+type EventHandler func(context.Context, ReconcileEvent)
+
+type Coordinator struct {
+	backend      ReconcileBackend
+	gate         chan struct{}
+	lifecycle    *AgentStateMachine
+	eventHandler EventHandler
+	attempt      int
+	generation   uint64
+}
+
+func NewCoordinator(backend ReconcileBackend, handlers ...EventHandler) (*Coordinator, error) {
 	if backend == nil {
 		return nil, fmt.Errorf("reconcile backend is required")
 	}
-	return &Coordinator{backend: backend, gate: make(chan struct{}, 1), lifecycle: NewAgentStateMachine()}, nil
+	var handler EventHandler
+	if len(handlers) > 0 {
+		handler = handlers[0]
+	}
+	return &Coordinator{backend: backend, gate: make(chan struct{}, 1), lifecycle: NewAgentStateMachine(), eventHandler: handler}, nil
 }
 
 func (c *Coordinator) State() AgentState {
 	return c.lifecycle.State()
 }
 
-func (c *Coordinator) FullReconcile(ctx context.Context) (ReconcileResult, error) {
-	result := ReconcileResult{State: c.State()}
+func (c *Coordinator) FullReconcile(ctx context.Context) (result ReconcileResult, err error) {
+	result = ReconcileResult{State: c.State()}
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
@@ -51,6 +77,24 @@ func (c *Coordinator) FullReconcile(ctx context.Context) (ReconcileResult, error
 	case <-ctx.Done():
 		return result, ctx.Err()
 	}
+	c.attempt++
+	attempt := c.attempt
+	started := time.Now()
+	c.emit(ctx, ReconcileEvent{Message: "reconcile started", Kind: ReconcileGlobal, Reason: "RECONCILE_STARTED", Class: "Started", Attempt: attempt})
+	generation := uint64(0)
+	defer func() {
+		event := ReconcileEvent{Kind: ReconcileGlobal, Generation: generation, Attempt: attempt, Duration: time.Since(started)}
+		if err == nil {
+			event.Message = "reconcile completed"
+			event.Reason = "RECONCILE_SUCCEEDED"
+			event.Class = "Success"
+		} else {
+			event.Message = "reconcile failed"
+			event.Class, event.Reason = classifyReconcileError(err)
+			event.Err = err
+		}
+		c.emit(ctx, event)
+	}()
 
 	if err := c.transitionTo(AgentReconciling); err != nil {
 		result.State = c.State()
@@ -61,6 +105,8 @@ func (c *Coordinator) FullReconcile(ctx context.Context) (ReconcileResult, error
 		return c.fail(result, err, false)
 	}
 	desired, err := c.discover(ctx, &result)
+	generation = desired.Generation
+	c.generation = desired.Generation
 	if err != nil {
 		return c.fail(result, err, true)
 	}
@@ -180,5 +226,35 @@ func (c *Coordinator) fail(result ReconcileResult, err error, disableConfirmed b
 }
 
 func (c *Coordinator) transitionTo(state AgentState) error {
-	return c.lifecycle.Transition(state)
+	from := c.lifecycle.State()
+	if err := c.lifecycle.Transition(state); err != nil {
+		return err
+	}
+	if from != state {
+		c.emit(context.Background(), ReconcileEvent{
+			Message: "agent state transition", Kind: ReconcileGlobal,
+			To: state, From: from, Generation: c.generation,
+			Reason: "STATE_TRANSITION", Class: "State",
+		})
+	}
+	return nil
+}
+
+func (c *Coordinator) emit(ctx context.Context, event ReconcileEvent) {
+	if c.eventHandler != nil {
+		c.eventHandler(ctx, event)
+	}
+}
+
+func classifyReconcileError(err error) (class, reason string) {
+	class = string(ErrorInternal)
+	reason = "RECONCILE_ERROR"
+	var classified *ClassifiedError
+	if errors.As(err, &classified) {
+		class = string(classified.Class())
+		if classified.ReasonCode() != "" {
+			reason = classified.ReasonCode()
+		}
+	}
+	return class, reason
 }

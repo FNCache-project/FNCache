@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -32,6 +33,11 @@ func main() {
 		fmt.Fprintln(os.Stderr, loggerErr)
 		os.Exit(2)
 	}
+	logger = scopeCommandLogger(logger, *manifest, *configPath)
+	logger.LogEvent(context.Background(), observability.Event{
+		Level: slog.LevelInfo, Message: "agent starting",
+		Attrs: []any{"kind", "Agent", "reason", "STARTUP", "class", "Lifecycle"},
+	})
 	if *cleanupMode {
 		if *manifest != "" || *configPath == "" {
 			logger.Error(context.Background(), "invalid cleanup command line", "error", "-cleanup requires -config and cannot use -static-config")
@@ -45,14 +51,21 @@ func main() {
 	if *cleanupMode {
 		err = runCleanup(*configPath, *dryRun)
 	} else if *manifest != "" {
-		err = run(*manifest)
+		err = run(*manifest, logger)
 	} else {
-		err = runDynamic(*configPath)
+		err = runDynamic(*configPath, logger)
 	}
 	if err != nil {
-		logger.Error(context.Background(), "agent exited", "error", err.Error())
+		logger.LogEvent(context.Background(), observability.Event{
+			Level: slog.LevelError, Message: "agent failed", RateLimitKey: "agent:RUNTIME_FAILED",
+			Attrs: []any{"kind", "Agent", "reason", "RUNTIME_FAILED", "class", "Internal", "error", err.Error()},
+		})
 		os.Exit(1)
 	}
+	logger.LogEvent(context.Background(), observability.Event{
+		Level: slog.LevelInfo, Message: "agent stopped",
+		Attrs: []any{"kind", "Agent", "reason", "SHUTDOWN", "class", "Lifecycle"},
+	})
 }
 
 func runCleanup(path string, dryRun bool) error {
@@ -76,8 +89,8 @@ func runCleanup(path string, dryRun bool) error {
 	return errors.Join(runErr, marshalErr)
 }
 
-func runDynamic(path string) error {
-	runtime, err := agent.NewDynamicRuntime(path)
+func runDynamic(path string, logger observability.EventLogger) error {
+	runtime, err := agent.NewDynamicRuntimeWithLogger(path, logger)
 	if err != nil {
 		return fmt.Errorf("create dynamic runtime: %w", err)
 	}
@@ -100,12 +113,12 @@ func runDynamic(path string) error {
 	return errors.Join(runErr, httpServer.Close(shutdownCtx))
 }
 
-func run(path string) (err error) {
+func run(path string, logger observability.EventLogger) (err error) {
 	config, err := agent.LoadStaticRuntimeManifest(path)
 	if err != nil {
 		return err
 	}
-	runtime, err := agent.NewStaticRuntime(context.Background(), config)
+	runtime, err := agent.NewStaticRuntimeWithLogger(context.Background(), config, logger)
 	if err != nil {
 		return fmt.Errorf("create static runtime: %w", err)
 	}
@@ -126,4 +139,24 @@ func run(path string) (err error) {
 
 func staticReconcileSucceeded(state reconcile.AgentState) bool {
 	return state == reconcile.AgentDisabled
+}
+
+func scopeCommandLogger(logger *observability.Logger, manifestPath, configPath string) *observability.Logger {
+	if logger == nil {
+		return nil
+	}
+	var node string
+	if manifestPath != "" {
+		if runtimeConfig, err := agent.LoadStaticRuntimeManifest(manifestPath); err == nil {
+			node = runtimeConfig.Preflight.Node.Name
+		}
+	} else if configPath != "" {
+		if runtimeConfig, err := config.Load(configPath); err == nil {
+			node = runtimeConfig.NodeName
+		}
+	}
+	if node == "" {
+		return logger
+	}
+	return logger.WithNode(node)
 }

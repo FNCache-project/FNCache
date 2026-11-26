@@ -36,7 +36,9 @@ type EventLogger interface {
 
 type Logger struct {
 	base      *slog.Logger
+	handler   slog.Handler
 	component string
+	node      string
 	limiter   *RateLimiter
 }
 
@@ -60,7 +62,7 @@ func New(config LoggingConfig) (*Logger, error) {
 	}
 	handler := slog.NewJSONHandler(config.Writer, &slog.HandlerOptions{Level: level})
 	base := slog.New(handler).With("component", config.Component, "node", config.Node)
-	return &Logger{base: base, component: config.Component, limiter: limiter}, nil
+	return &Logger{base: base, handler: handler, component: config.Component, node: config.Node, limiter: limiter}, nil
 }
 
 func NewFromEnvironment(component string) (*Logger, error) {
@@ -74,6 +76,36 @@ func NewDefault(component string) *Logger {
 	}
 	logger, _ = New(LoggingConfig{Level: "info", Component: component, Node: os.Getenv("ONCACHE_NODE_NAME")})
 	return logger
+}
+
+// WithComponent returns a logger that shares the handler and rate limiter but
+// adds a component scope to every record.
+func (l *Logger) WithComponent(component string) *Logger {
+	if l == nil {
+		return nil
+	}
+	base := l.base
+	if l.handler != nil {
+		base = slog.New(l.handler).With("component", component, "node", l.node)
+	} else {
+		base = base.With("component", component, "node", l.node)
+	}
+	return &Logger{base: base, handler: l.handler, component: component, node: l.node, limiter: l.limiter}
+}
+
+// WithNode returns a logger that shares the handler and rate limiter but uses
+// the supplied node identity in every record.
+func (l *Logger) WithNode(node string) *Logger {
+	if l == nil {
+		return nil
+	}
+	base := l.base
+	if l.handler != nil {
+		base = slog.New(l.handler).With("component", l.component, "node", node)
+	} else {
+		base = base.With("component", l.component, "node", node)
+	}
+	return &Logger{base: base, handler: l.handler, component: l.component, node: node, limiter: l.limiter}
 }
 
 func ParseLevel(value string) (slog.Level, error) {
@@ -92,7 +124,7 @@ func ParseLevel(value string) (slog.Level, error) {
 }
 
 func (l *Logger) Error(ctx context.Context, message string, attrs ...any) {
-	l.base.ErrorContext(ctx, message, attrs...)
+	l.LogEvent(ctx, Event{Level: slog.LevelError, Message: message, Attrs: attrs})
 }
 
 func (l *Logger) LogEvent(ctx context.Context, event Event) {
@@ -103,15 +135,116 @@ func (l *Logger) LogEvent(ctx context.Context, event Event) {
 	if key != "" {
 		key = strings.Join([]string{l.component, key}, ":")
 	}
-	allowed, suppressed := l.limiter.Allow(key)
+	allowed, suppressed := true, uint64(0)
+	if l.limiter != nil {
+		allowed, suppressed = l.limiter.Allow(key)
+	}
 	if !allowed {
 		return
 	}
-	attrs := append([]any(nil), event.Attrs...)
+	attrs := sanitizeAttrs(event.Attrs)
 	if suppressed > 0 {
 		attrs = append(attrs, "suppressed", suppressed)
 	}
 	l.base.Log(ctx, event.Level, event.Message, attrs...)
+}
+
+// DurationMillis converts a duration to a JSON-friendly millisecond value.
+func DurationMillis(value time.Duration) float64 {
+	return float64(value) / float64(time.Millisecond)
+}
+
+var sensitiveAttrNames = map[string]struct{}{
+	"apikey":        {},
+	"authorization": {},
+	"clientsecret":  {},
+	"credential":    {},
+	"password":      {},
+	"privatekey":    {},
+	"secret":        {},
+	"token":         {},
+}
+
+func sanitizeAttrs(attrs []any) []any {
+	if len(attrs) == 0 {
+		return nil
+	}
+	result := make([]any, 0, len(attrs))
+	for index := 0; index < len(attrs); {
+		if key, ok := attrs[index].(string); ok && index+1 < len(attrs) {
+			value := attrs[index+1]
+			switch {
+			case isSensitiveAttrName(key):
+				value = "[REDACTED]"
+			case normalizeAttrName(key) == "error":
+				value = redactText(fmt.Sprint(value))
+			}
+			result = append(result, key, value)
+			index += 2
+			continue
+		}
+		result = append(result, attrs[index])
+		index++
+	}
+	return result
+}
+
+func isSensitiveAttrName(name string) bool {
+	_, ok := sensitiveAttrNames[normalizeAttrName(name)]
+	return ok
+}
+
+func normalizeAttrName(name string) string {
+	name = strings.ToLower(name)
+	name = strings.ReplaceAll(name, "-", "")
+	name = strings.ReplaceAll(name, "_", "")
+	return name
+}
+
+func redactText(value string) string {
+	for _, marker := range []struct {
+		text       string
+		toBoundary bool
+	}{
+		{text: "authorization:", toBoundary: true},
+		{text: "authorization=", toBoundary: true},
+		{text: "password=", toBoundary: false},
+		{text: "secret=", toBoundary: false},
+		{text: "token=", toBoundary: false},
+	} {
+		searchFrom := 0
+		for searchFrom < len(value) {
+			lower := strings.ToLower(value)
+			relative := strings.Index(lower[searchFrom:], marker.text)
+			if relative < 0 {
+				break
+			}
+			start := searchFrom + relative + len(marker.text)
+			valueStart := start
+			for valueStart < len(value) && strings.ContainsRune(" \t", rune(value[valueStart])) {
+				valueStart++
+			}
+			if strings.HasPrefix(strings.ToLower(value[valueStart:]), "[redacted]") {
+				searchFrom = valueStart + len("[REDACTED]")
+				continue
+			}
+			end := valueStart
+			boundaries := " \t\r\n,;"
+			if marker.toBoundary {
+				boundaries = "\r\n,;"
+			}
+			for end < len(value) && !strings.ContainsRune(boundaries, rune(value[end])) {
+				end++
+			}
+			if end == valueStart {
+				searchFrom = start + 1
+				continue
+			}
+			value = value[:valueStart] + "[REDACTED]" + value[end:]
+			searchFrom = valueStart + len("[REDACTED]")
+		}
+	}
+	return value
 }
 
 type RateLimiter struct {

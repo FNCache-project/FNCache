@@ -1,6 +1,7 @@
 package reconcile
 
 import (
+	"errors"
 	"fmt"
 	"net/netip"
 	"strings"
@@ -223,6 +224,24 @@ type ClassifiedError struct {
 	reason     string
 	retryAfter time.Duration
 	cause      error
+}
+
+// ClassifyError returns stable logging fields for an error. The fallback
+// reason is used when the error does not carry a ClassifiedError identity.
+func ClassifyError(err error, fallbackReason string) (class ErrorClass, reason string) {
+	class = ErrorInternal
+	reason = fallbackReason
+	if reason == "" {
+		reason = "RECONCILE_ERROR"
+	}
+	var classified *ClassifiedError
+	if errors.As(err, &classified) {
+		class = classified.Class()
+		if classified.ReasonCode() != "" {
+			reason = classified.ReasonCode()
+		}
+	}
+	return class, reason
 }
 
 func NewClassifiedError(class ErrorClass, reason string, retryAfter time.Duration, cause error) *ClassifiedError {
