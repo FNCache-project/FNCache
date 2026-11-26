@@ -334,8 +334,18 @@ int tc_init_in(struct __sk_buff *ctx) {
         oncache_stat_inc(ONCACHE_STAT_INIT_IN_ENDPOINT_MISS);
         goto out;
     } else {
-        __builtin_memcpy(ingressinfo_->dst_mac, eth->h_dest, ETH_ALEN);
-        __builtin_memcpy(ingressinfo_->src_mac, eth->h_source, ETH_ALEN);
+        struct oncache_ingress_v1 learned = {
+            .ifindex = ingressinfo_->ifindex,
+        };
+        __builtin_memcpy(learned.dst_mac, eth->h_dest, ETH_ALEN);
+        __builtin_memcpy(learned.src_mac, eth->h_source, ETH_ALEN);
+        if (maccmp(ingressinfo_->dst_mac, learned.dst_mac, ETH_ALEN) ||
+            maccmp(ingressinfo_->src_mac, learned.src_mac, ETH_ALEN)) {
+            if (bpf_map_update_elem(&ingress_cache, &iphdr->daddr,
+                                    &learned, BPF_EXIST)) {
+                goto out;
+            }
+        }
     }
 
 #ifdef ENABLENP
